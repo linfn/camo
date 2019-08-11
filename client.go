@@ -105,7 +105,7 @@ func (c *Client) Run(iface *Iface) error {
 		return fmt.Errorf("failed to resolve host: %v", err)
 	}
 	srvip, _, _ := net.SplitHostPort(resolvedAddr)
-	fmt.Printf("server address is %s", resolvedAddr)
+	log.Printf("server address is %s", resolvedAddr)
 
 	hc := &http.Client{}
 	hc.Transport = c.h2Transport(resolvedAddr)

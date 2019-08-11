@@ -51,6 +51,7 @@ func main() {
 	c := camo.Client{
 		CID:         cid,
 		Host:        host,
+		Password:    *password,
 		SetupRoute:  camo.RedirectDefaultGateway,
 		ResolveAddr: *resolve,
 		UseH2C:      *useH2C,
