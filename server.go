@@ -2,7 +2,6 @@ package camo
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"log"
 	"net"
@@ -14,8 +13,6 @@ import (
 	"golang.org/x/net/ipv4"
 )
 
-const metaClientID = "camo-client-id"
-
 const (
 	defaultIfaceSendChanSize   = 256
 	defaultSessionSendChanSize = 256
@@ -23,11 +20,11 @@ const (
 
 var (
 	// ErrNoIPv4Config ...
-	ErrNoIPv4Config = errors.New("no ipv4 config")
+	ErrNoIPv4Config = Error(http.StatusBadRequest, "server no ipv4 config")
 	// ErrIPExhausted ...
-	ErrIPExhausted = errors.New("ip exhausted")
+	ErrIPExhausted = Error(http.StatusServiceUnavailable, "ip exhausted")
 	// ErrSessionNotFound ...
-	ErrSessionNotFound = errors.New("session not found")
+	ErrSessionNotFound = Error(http.StatusBadRequest, "session not found")
 )
 
 // Server ...
@@ -59,7 +56,7 @@ func (s *Server) getIfaceSendChan() chan bufPacket {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ifaceSendChan == nil {
-		s.ifaceSendChan = make(chan bufPacket)
+		s.ifaceSendChan = make(chan bufPacket, defaultIfaceSendChanSize)
 	}
 	return s.ifaceSendChan
 }
@@ -208,7 +205,7 @@ func (s *Server) Close() {
 // RequestIPv4 ...
 func (s *Server) RequestIPv4(cid string, reqIP net.IP) (ip net.IP, ttl time.Duration, err error) {
 	if cid == "" {
-		err = errors.New("empty cid")
+		err = Error(http.StatusBadRequest, "empty cid")
 		return
 	}
 
@@ -395,7 +392,6 @@ func (s *Server) Handler(prefix string) http.Handler {
 		}
 		path := strings.TrimPrefix(r.URL.Path, prefix+"/tunnel/")
 		if strings.Contains(path, "/") {
-			log.Println(path)
 			http.NotFound(w, r)
 			return
 		}

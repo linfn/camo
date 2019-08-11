@@ -6,6 +6,6 @@ RUN apt-get update && apt-get install -y iproute2 iptables
 
 WORKDIR /camo
 
-EXPOSE 2019
+EXPOSE 443
 
 CMD [ "./docker-dev-entrypoint.sh" ]
