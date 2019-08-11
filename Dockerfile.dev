@@ -1,6 +1,7 @@
 FROM golang
 
-RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list
+ARG USE_CN_APT_SOURCES
+RUN [ -z "$USE_CN_APT_SOURCES" ] || sed -r -i 's/(deb|security).debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list
 
 RUN apt-get update && apt-get install -y iproute2 iptables
 

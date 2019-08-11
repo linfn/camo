@@ -12,7 +12,7 @@ DEV_CONTAINER_NAME=camo-dev
 
 .PHONY: docker-dev
 docker-dev:
-	docker build -t camo:dev -f Dockerfile.dev .
+	docker build -t camo:dev -f Dockerfile.dev --build-arg USE_CN_APT_SOURCES .
 	docker rm -f $(DEV_CONTAINER_NAME) 2>/dev/null || true
 	docker create -it -v `pwd`:/camo -p 2019:2019 --cap-add=NET_ADMIN --device /dev/net/tun --name $(DEV_CONTAINER_NAME) camo:dev
 
