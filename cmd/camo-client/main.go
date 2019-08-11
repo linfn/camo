@@ -14,10 +14,13 @@ import (
 )
 
 var help = flag.Bool("h", false, "help")
-var cid = flag.String("cid", "", "cid")
+var password = flag.String("password", "", "password")
+var resolve = flag.String("resolve", "", "provide a custom address for a specific host and port pair")
+var cid = flag.String("cid", "", "client unique identify")
+var useH2C = flag.Bool("h2c", false, "use h2c (for debug) ")
 
 func usage() {
-	fmt.Printf("Usage: %s [OPTIONS] server_address\n", os.Args[0])
+	fmt.Printf("Usage: %s [OPTIONS] host\n", os.Args[0])
 	flag.PrintDefaults()
 }
 
@@ -28,9 +31,9 @@ func main() {
 		flag.Usage()
 		return
 	}
-	addr := flag.Arg(0)
-	if addr == "" {
-		log.Panicln("server address empty")
+	host := flag.Arg(0)
+	if host == "" {
+		log.Fatal("empty host")
 	}
 
 	log.SetFlags(log.LstdFlags | log.Llongfile)
@@ -39,24 +42,30 @@ func main() {
 	if err != nil {
 		log.Panicln(err)
 	}
-	defer iface.Close()
 
 	cid := *cid
 	if cid == "" {
-		cid = getCID(addr)
+		cid = getCID(host)
 	}
 
-	c := camo.NewClient(cid)
+	c := camo.Client{
+		CID:         cid,
+		Host:        host,
+		SetupRoute:  camo.RedirectDefaultGateway,
+		ResolveAddr: *resolve,
+		UseH2C:      *useH2C,
+	}
+
 	go func() {
 		s := make(chan os.Signal)
 		signal.Notify(s, os.Interrupt, syscall.SIGTERM)
 		<-s
-		c.Stop()
+		c.Close()
 	}()
 
-	err = c.Run(addr, iface)
+	err = c.Run(iface)
 	if err != nil {
-		log.Println(err)
+		log.Fatal(err)
 	}
 }
 

@@ -1,6 +1,12 @@
-.PHONY: proto
-proto:
-	protoc --gofast_out=plugins=grpc:. gateway.proto
+.PHONY: all
+all: server client
+
+.PHONY: server client
+server:
+	go build ./cmd/camo-server
+
+client:
+	go build ./cmd/camo-client
 
 DEV_CONTAINER_NAME=camo-dev
 

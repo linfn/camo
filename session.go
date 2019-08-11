@@ -4,21 +4,19 @@ import "net"
 
 // Session ...
 type Session struct {
-	CID  string
-	IP   net.IP
-	Send chan []byte
+	cid  string
+	ipv4 net.IP
+	send chan bufPacket
 }
 
-// FindSessionByCID ...
-func (s *Server) FindSessionByCID(cid string) (*Session, bool) {
+func (s *Server) findSessionByCID(cid string) (*Session, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	ss, ok := s.cidSession[cid]
 	return ss, ok
 }
 
-// FindSessionByIP ...
-func (s *Server) FindSessionByIP(ip net.IP) (*Session, bool) {
+func (s *Server) findSessionByIP(ip net.IP) (*Session, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	ss, ok := s.ipSession[ip.String()]

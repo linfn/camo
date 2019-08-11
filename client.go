@@ -1,69 +1,121 @@
 package camo
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
+	"net/http"
+	"net/url"
 	"strings"
 	"sync"
+	"time"
 
+	"golang.org/x/net/http2"
 	"golang.org/x/net/ipv4"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/metadata"
 )
 
 // Client ...
 type Client struct {
-	cid        string
-	SetupRoute func(dev string, devCIDR string, srvIP string) (cancel func(), err error)
+	CID         string
+	Host        string
+	ResolveAddr string
+	Password    string
+	SetupRoute  func(dev string, devCIDR string, srvIP string) (reset func(), err error)
+	UseH2C      bool
 
-	stop     chan struct{}
-	stopOnce sync.Once
+	doneChan chan struct{}
+	doneOnce sync.Once
 }
 
-// NewClient ...
-func NewClient(cid string) *Client {
-	return &Client{
-		cid:        cid,
-		SetupRoute: SetupClientDefaultRoute,
-		stop:       make(chan struct{}),
+func (c *Client) getDoneChan() chan struct{} {
+	c.doneOnce.Do(func() {
+		c.doneChan = make(chan struct{})
+	})
+	return c.doneChan
+}
+
+func (c *Client) resolveAddr() (string, error) {
+	var addr string
+	if c.ResolveAddr != "" {
+		addr = c.ResolveAddr
+	} else {
+		addr = c.Host
 	}
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		addr = net.JoinHostPort(addr, "443")
+	}
+	a, err := net.ResolveTCPAddr("tcp", addr)
+	if err != nil {
+		return "", err
+	}
+	return a.String(), nil
 }
 
-// CID ...
-func (c *Client) CID() string {
-	return c.cid
+func (c *Client) h2Transport(resolvedAddr string) http.RoundTripper {
+	return &http2.Transport{
+		DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
+			if resolvedAddr != "" {
+				addr = resolvedAddr
+			}
+			if c.UseH2C {
+				return net.Dial(network, addr)
+			}
+			// http2: Transport.dialTLSDefault
+			cn, err := tls.Dial(network, addr, cfg)
+			if err != nil {
+				return nil, err
+			}
+			if err := cn.Handshake(); err != nil {
+				return nil, err
+			}
+			if !cfg.InsecureSkipVerify {
+				if err := cn.VerifyHostname(cfg.ServerName); err != nil {
+					return nil, err
+				}
+			}
+			state := cn.ConnectionState()
+			if p := state.NegotiatedProtocol; p != http2.NextProtoTLS {
+				return nil, fmt.Errorf("http2: unexpected ALPN protocol %q; want %q", p, http2.NextProtoTLS)
+			}
+			if !state.NegotiatedProtocolIsMutual {
+				return nil, errors.New("http2: could not negotiate protocol mutually")
+			}
+			return cn, nil
+		},
+	}
 }
 
 // Run ...
-func (c *Client) Run(srvAddr string, iface *Iface) error {
-	// TODO host 支持
-	srvip, _, err := net.SplitHostPort(srvAddr)
-	if err != nil {
-		return fmt.Errorf("invalid server address: %v", err)
+func (c *Client) Run(iface *Iface) error {
+	defer iface.Close()
+
+	if c.CID == "" {
+		return errors.New("empty cid")
 	}
 
-	conn, err := grpc.Dial(srvAddr, grpc.WithInsecure())
+	resolvedAddr, err := c.resolveAddr()
+	if err != nil {
+		return fmt.Errorf("failed to resolve host: %v", err)
+	}
+	srvip, _, _ := net.SplitHostPort(resolvedAddr)
+	fmt.Printf("server address is %s", resolvedAddr)
+
+	hc := &http.Client{}
+	hc.Transport = c.h2Transport(resolvedAddr)
+
+	ip, ttl, err := c.reqIPv4(context.TODO(), hc, nil)
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
-	gc := NewGatewayClient(conn)
 
-	ipResp, err := gc.RequestIP(context.TODO(), &IPReq{
-		Cid: c.cid,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to request ip: %v", err)
-	}
-	ip := net.ParseIP(ipResp.Ip)
-	if ip == nil {
-		return fmt.Errorf("server response invalid ip (%s)", ipResp.Ip)
-	}
-
-	log.Printf("get ip %s", ip)
+	log.Printf("client get ip (%s) ttl (%d)", ip, ttl)
 
 	err = iface.Up(ip.String() + "/32")
 	if err != nil {
@@ -80,56 +132,140 @@ func (c *Client) Run(srvAddr string, iface *Iface) error {
 		defer resetRoute()
 	}
 
-	return c.forward(gc, iface)
+	return c.tunnel(hc, iface)
 }
 
-func (c *Client) forward(gc GatewayClient, iface *Iface) error {
-	stream, err := gc.Open(metadata.AppendToOutgoingContext(context.TODO(), metaClientID, c.cid))
-	if err != nil {
-		return fmt.Errorf("failed to open stream: %v", err)
+func (c *Client) url(path string) *url.URL {
+	return &url.URL{
+		Scheme: "https",
+		Host:   c.Host,
+		Path:   path,
 	}
-	defer stream.CloseSend()
+}
 
-	exited := make(chan struct{})
-	defer close(exited)
-	go func() {
+func (c *Client) reqIPv4(ctx context.Context, hc *http.Client, reqIP net.IP) (ip net.IP, ttl time.Duration, err error) {
+	var url *url.URL
+	if reqIP != nil {
+		url = c.url("/ip/v4/" + reqIP.String())
+	} else {
+		url = c.url("/ip/v4/")
+	}
+
+	reqBody, err := json.Marshal(&struct {
+		CID string `json:"cid"`
+	}{c.CID})
+	if err != nil {
+		return
+	}
+
+	req := &http.Request{
+		Method: "POST",
+		URL:    url,
+		Header: http.Header{
+			"Content-Type": []string{"application/json"},
+		},
+		Body: ioutil.NopCloser(bytes.NewReader(reqBody)),
+	}
+	SetAuth(req, c.Password)
+	req.WithContext(ctx)
+	res, err := hc.Do(req)
+	if err != nil {
+		if err == context.Canceled || err == context.DeadlineExceeded {
+			return
+		}
+		err = fmt.Errorf("failed to get ip, error: %v", err)
+		return
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		err = fmt.Errorf("failed to get ip, status: %s", res.Status)
+		return
+	}
+
+	var result struct {
+		IP  string `json:"ip"`
+		TTL int    `json:"ttl"`
+	}
+	err = json.NewDecoder(res.Body).Decode(&result)
+	if err != nil {
+		err = fmt.Errorf("failed to decode ip result, error: %s", err)
+		return
+	}
+	ip = net.ParseIP(result.IP)
+	if ip == nil {
+		err = fmt.Errorf("failed to decode ip (%s)", result.IP)
+		return
+	}
+
+	return ip, time.Duration(result.TTL) * time.Second, nil
+}
+
+func (c *Client) tunnel(hc *http.Client, iface *Iface) (err error) {
+	r, w := io.Pipe()
+	req := &http.Request{
+		Method: "POST",
+		URL:    c.url("/tunnel/" + c.CID),
+		Body:   ioutil.NopCloser(r),
+	}
+	SetAuth(req, c.Password)
+	req.WithContext(context.TODO())
+	res, err := hc.Do(req)
+	if err != nil {
+		iface.Close()
+		err = fmt.Errorf("failed to open tunnel, error: %v", err)
+		return
+	}
+	if res.StatusCode != http.StatusOK {
+		iface.Close()
+		res.Body.Close()
+		err = fmt.Errorf("failed to open tunnel, status: %s", res.Status)
+		return
+	}
+
+	done := make(chan struct{})
+	exit := func(e error) {
 		select {
-		case <-c.stop:
+		case <-done:
+		default:
+			close(done)
+			err = e
 			iface.Close()
-		case <-exited:
+			w.Close()
+			res.Body.Close()
+		}
+	}
+
+	go func() {
+		clientDone := c.getDoneChan()
+		select {
+		case <-clientDone:
+			exit(nil)
+		case <-done:
 		}
 	}()
 
 	var wg sync.WaitGroup
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		defer iface.Close()
+		var h ipv4.Header
 		for {
-			pkt, err := stream.Recv()
-			if err != nil {
-				log.Println(err)
-				return
+			var buf [DefaultMTU]byte
+			n, e := readPacket(buf[:], &h, res.Body)
+			if n > 0 {
+				log.Printf("(debug) conn recv: %s", &h)
+				_, e := iface.Write(buf[:n])
+				if e != nil {
+					exit(e)
+					return
+				}
 			}
-			packet := pkt.Data
-			h, e := ipv4.ParseHeader(packet)
 			if e != nil {
-				log.Printf("failed to parse ipv4 header %v", e)
-				continue
-			}
-			if h.Version != 4 {
-				//log.Println("(debug) drop ip version 6")
-				continue
-			}
-			log.Printf("(debug) iface recv: %s", h)
-			n, err := iface.Write(packet)
-			if err != nil {
-				log.Println(err)
-				return
-			}
-			if n != len(pkt.Data) {
-				err = io.ErrShortWrite
-				log.Println(err)
+				if e == io.EOF {
+					e = nil
+				}
+				exit(e)
 				return
 			}
 		}
@@ -138,52 +274,55 @@ func (c *Client) forward(gc GatewayClient, iface *Iface) error {
 	wg.Add(1)
 	go func() {
 		wg.Done()
-		defer stream.CloseSend()
-		var buf [defaultIfaceReadBufSize]byte
+		var h ipv4.Header
 		for {
-			n, err := iface.Read(buf[:])
+			var buf [DefaultMTU]byte
+			n, e := iface.Read(buf[:])
 			if n > 0 {
 				packet := buf[:n]
-				h, e := ipv4.ParseHeader(packet)
+				e := h.Parse(packet)
 				if e != nil {
 					log.Printf("failed to parse ipv4 header %v", e)
-					continue
+					goto ERR
 				}
 				if h.Version != 4 {
 					//log.Println("(debug) drop ip version 6")
-					continue
+					goto ERR
 				}
-				log.Printf("(debug) iface recv: %s", h)
-				err := stream.Send(&Packet{
-					Data: buf[:n],
-				})
+				log.Printf("(debug) iface recv: %s", &h)
+				_, e = writePacket(w, packet)
 				if err != nil {
-					log.Println(err)
+					exit(err)
 					return
 				}
 			}
-			if err != nil {
-				if err != io.EOF {
-					log.Println(err)
+		ERR:
+			if e != nil {
+				if e == io.EOF {
+					e = nil
 				}
+				exit(e)
 				return
 			}
 		}
 	}()
 
 	wg.Wait()
-	return nil
+	return
 }
 
-// Stop ...
-func (c *Client) Stop() {
-	c.stopOnce.Do(func() {
-		close(c.stop)
-	})
+// Close ...
+func (c *Client) Close() {
+	done := c.getDoneChan()
+	select {
+	case <-done:
+	default:
+		close(done)
+	}
 }
 
-// SetupClientDefaultRoute 参考 https://www.tinc-vpn.org/examples/redirect-gateway/
-func SetupClientDefaultRoute(dev string, devCIDR string, srvIP string) (cancel func(), err error) {
+// RedirectDefaultGateway 参考 https://www.tinc-vpn.org/examples/redirect-gateway/
+func RedirectDefaultGateway(dev string, devCIDR string, srvIP string) (reset func(), err error) {
 	oldGateway, oldDev, _, err := GetRoute(srvIP)
 	if err != nil {
 		return nil, err

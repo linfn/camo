@@ -16,5 +16,5 @@
 
 1. 能像 VPN 一样转发全局流量, 而不仅仅是一个 local socks5 or http proxy
 2. 分流,  PAC + 自定义规则
-3. 首先支持 mac 和 android (因为是我常用的设备)
+3. 首先支持 linux, mac 和 android (因为是我常用的设备)
 

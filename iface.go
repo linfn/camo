@@ -8,13 +8,15 @@ import (
 	"github.com/songgao/water"
 )
 
+// TODO MTU
+
 // Iface ...
 type Iface struct {
 	*water.Interface
-	cidr   string
-	ip     net.IP
-	subnet *net.IPNet
-	once   sync.Once
+	cidr      string
+	ip        net.IP
+	subnet    *net.IPNet
+	closeOnce sync.Once
 }
 
 // NewTun ...
@@ -70,10 +72,19 @@ func (i *Iface) Subnet() *net.IPNet {
 	return i.subnet
 }
 
+// MTU ..
+func (i *Iface) MTU() int {
+	ifi, err := net.InterfaceByName(i.Name())
+	if err != nil {
+		return 0
+	}
+	return ifi.MTU
+}
+
 // Close ...
 func (i *Iface) Close() error {
 	var err error
-	i.once.Do(func() {
+	i.closeOnce.Do(func() {
 		i.Down()
 		err = i.Interface.Close()
 	})
