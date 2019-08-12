@@ -264,6 +264,8 @@ func (c *Client) tunnel(hc *http.Client, iface *Iface) (err error) {
 			if e != nil {
 				if e == io.EOF {
 					e = nil
+				} else {
+					e = fmt.Errorf("conn read packet error: %v", e)
 				}
 				exit(e)
 				return
@@ -280,7 +282,7 @@ func (c *Client) tunnel(hc *http.Client, iface *Iface) (err error) {
 			n, e := iface.Read(buf[:])
 			if n > 0 {
 				packet := buf[:n]
-				e := h.Parse(packet)
+				e := parseIPv4Header(&h, packet)
 				if e != nil {
 					log.Printf("failed to parse ipv4 header %v", e)
 					goto ERR

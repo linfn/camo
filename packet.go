@@ -1,6 +1,7 @@
 package camo
 
 import (
+	"encoding/binary"
 	"errors"
 	"io"
 
@@ -17,6 +18,16 @@ var (
 	errUnsupportedPacketVersion = errors.New("unsupported packet version")
 )
 
+func parseIPv4Header(h *ipv4.Header, b []byte) error {
+	err := h.Parse(b)
+	if err != nil {
+		return err
+	}
+	h.TotalLen = int(binary.BigEndian.Uint16(b[2:4]))
+	h.FragOff = int(binary.BigEndian.Uint16(b[6:8]))
+	return nil
+}
+
 func readPacket(b []byte, h *ipv4.Header, r io.Reader) (int, error) {
 	if len(b) < ipv4.HeaderLen {
 		return 0, io.ErrShortBuffer
@@ -25,7 +36,7 @@ func readPacket(b []byte, h *ipv4.Header, r io.Reader) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	err = h.Parse(b[:ipv4.HeaderLen])
+	err = parseIPv4Header(h, b[:ipv4.HeaderLen])
 	if err != nil {
 		return 0, err
 	}

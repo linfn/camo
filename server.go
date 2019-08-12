@@ -2,6 +2,7 @@ package camo
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -152,7 +153,7 @@ func (s *Server) Serve(iface io.ReadWriteCloser) (err error) {
 			freeBuf := true
 			n, e := iface.Read(buf)
 			if n > 0 {
-				e := h.Parse(buf[:n])
+				e := parseIPv4Header(&h, buf[:n])
 				if e != nil {
 					log.Printf("(debug) iface failed to parse ipv4 header %v", e)
 					goto ERR
@@ -322,6 +323,8 @@ func (s *Server) Tunnel(cid string, rw io.ReadWriteCloser) (err error) {
 		if e != nil {
 			if e != io.EOF {
 				e = nil
+			} else {
+				e = fmt.Errorf("conn read packet error: %v", e)
 			}
 			exit(e)
 			return
