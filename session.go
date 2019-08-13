@@ -6,7 +6,7 @@ import "net"
 type Session struct {
 	cid  string
 	ipv4 net.IP
-	send chan bufPacket
+	writeChan chan []byte
 }
 
 func (s *Server) findSessionByCID(cid string) (*Session, bool) {

@@ -21,24 +21,75 @@ import (
 	"golang.org/x/net/ipv4"
 )
 
+const (
+	defaultClientIfaceWriteChanLen  = 256
+	defaultClientTunnelWriteChanLen = 256
+	// DefaultConnCount ...
+	DefaultConnCount = 1
+)
+
 // Client ...
 type Client struct {
 	CID         string
 	Host        string
 	ResolveAddr string
 	Password    string
+	MTU         int
+	Conns       int
 	SetupRoute  func(dev string, devCIDR string, srvIP string) (reset func(), err error)
 	UseH2C      bool
 
-	doneChan chan struct{}
-	doneOnce sync.Once
+	mu              sync.Mutex
+	bufPool         sync.Pool
+	ifaceWriteChan  chan []byte
+	tunnelWriteChan chan []byte
+	doneChan        chan struct{}
 }
 
 func (c *Client) getDoneChan() chan struct{} {
-	c.doneOnce.Do(func() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.doneChan == nil {
 		c.doneChan = make(chan struct{})
-	})
+	}
 	return c.doneChan
+}
+
+func (c *Client) getIfaceWriteChan() chan []byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.ifaceWriteChan == nil {
+		c.ifaceWriteChan = make(chan []byte, defaultClientIfaceWriteChanLen)
+	}
+	return c.ifaceWriteChan
+}
+
+func (c *Client) getTunnelWriteChan() chan []byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.tunnelWriteChan == nil {
+		c.tunnelWriteChan = make(chan []byte, defaultClientTunnelWriteChanLen)
+	}
+	return c.tunnelWriteChan
+}
+
+func (c *Client) mtu() int {
+	if c.MTU <= 0 {
+		return DefaultMTU
+	}
+	return c.MTU
+}
+
+func (c *Client) getBuffer() []byte {
+	b := c.bufPool.Get()
+	if b == nil {
+		return make([]byte, c.mtu())
+	}
+	return b.([]byte)
+}
+
+func (c *Client) freeBuffer(b []byte) {
+	c.bufPool.Put(b[:cap(b)])
 }
 
 func (c *Client) resolveAddr() (string, error) {
@@ -93,7 +144,7 @@ func (c *Client) h2Transport(resolvedAddr string) http.RoundTripper {
 }
 
 // Run ...
-func (c *Client) Run(iface *Iface) error {
+func (c *Client) Run(iface *Iface) (err error) {
 	defer iface.Close()
 
 	if c.CID == "" {
@@ -132,7 +183,73 @@ func (c *Client) Run(iface *Iface) error {
 		defer resetRoute()
 	}
 
-	return c.tunnel(hc, iface)
+	done := make(chan struct{})
+	exit := func(e error) {
+		select {
+		case <-done:
+		default:
+			close(done)
+			err = e
+		}
+	}
+
+	go func() {
+		clientDone := c.getDoneChan()
+		select {
+		case <-clientDone:
+			exit(nil)
+		case <-done:
+		}
+	}()
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		tunnelWriteChan := c.getTunnelWriteChan()
+		h := ipv4.Header{}
+		e := serveIO(done, iface, c, c.getIfaceWriteChan(), func(stop <-chan struct{}, pkt []byte) (ok bool, err error) {
+			if e := parseIPv4Header(&h, pkt); e != nil {
+				log.Printf("iface failed to parse ipv4 header %v", e)
+				return
+			}
+			if h.Version != 4 {
+				//log.Printf("(debug) iface drop ip version %d", h.Version)
+				return
+			}
+			log.Printf("(debug) iface recv: %s", &h)
+			select {
+			case tunnelWriteChan <- pkt:
+				ok = true
+				return
+			case <-stop:
+				return
+			}
+		})
+		exit(e)
+	}()
+
+	connCount := c.Conns
+	if connCount <= 0 {
+		connCount = DefaultConnCount
+	}
+	for i := 0; i < connCount; i++ {
+		hc := hc
+		// HTTP/2 client only have about one connection per host
+		if i > 0 {
+			hc = &http.Client{}
+			hc.Transport = c.h2Transport(resolvedAddr)
+		}
+		wg.Add(1)
+		go func(hc *http.Client) {
+			defer wg.Done()
+			exit(c.tunnel(done, hc))
+		}(hc)
+	}
+
+	wg.Wait()
+	return
 }
 
 func (c *Client) url(path string) *url.URL {
@@ -200,7 +317,21 @@ func (c *Client) reqIPv4(ctx context.Context, hc *http.Client, reqIP net.IP) (ip
 	return ip, time.Duration(result.TTL) * time.Second, nil
 }
 
-func (c *Client) tunnel(hc *http.Client, iface *Iface) (err error) {
+type httpClientStream struct {
+	io.ReadCloser
+	io.WriteCloser
+}
+
+func (s *httpClientStream) Close() error {
+	err1 := s.ReadCloser.Close()
+	err2 := s.WriteCloser.Close()
+	if err1 != nil {
+		return err1
+	}
+	return err2
+}
+
+func (c *Client) tunnel(stop <-chan struct{}, hc *http.Client) (err error) {
 	r, w := io.Pipe()
 	req := &http.Request{
 		Method: "POST",
@@ -211,106 +342,33 @@ func (c *Client) tunnel(hc *http.Client, iface *Iface) (err error) {
 	req.WithContext(context.TODO())
 	res, err := hc.Do(req)
 	if err != nil {
-		iface.Close()
+		w.Close()
 		err = fmt.Errorf("failed to open tunnel, error: %v", err)
 		return
 	}
 	if res.StatusCode != http.StatusOK {
-		iface.Close()
+		w.Close()
 		res.Body.Close()
 		err = fmt.Errorf("failed to open tunnel, status: %s", res.Status)
 		return
 	}
 
-	done := make(chan struct{})
-	exit := func(e error) {
+	ifaceWriteChan := c.getIfaceWriteChan()
+	h := ipv4.Header{}
+	return serveIO(stop, &packetIO{&httpClientStream{res.Body, w}}, c, c.getTunnelWriteChan(), func(stop <-chan struct{}, pkt []byte) (ok bool, err error) {
+		if e := parseIPv4Header(&h, pkt); e != nil {
+			log.Printf("tunnel failed to parse ipv4 header %v", e)
+			return
+		}
+		log.Printf("(debug) tunnel recv: %s", &h)
 		select {
-		case <-done:
-		default:
-			close(done)
-			err = e
-			iface.Close()
-			w.Close()
-			res.Body.Close()
+		case ifaceWriteChan <- pkt:
+			ok = true
+			return
+		case <-stop:
+			return
 		}
-	}
-
-	go func() {
-		clientDone := c.getDoneChan()
-		select {
-		case <-clientDone:
-			exit(nil)
-		case <-done:
-		}
-	}()
-
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		var h ipv4.Header
-		for {
-			var buf [DefaultMTU]byte
-			n, e := readPacket(buf[:], &h, res.Body)
-			if n > 0 {
-				log.Printf("(debug) conn recv: %s", &h)
-				_, e := iface.Write(buf[:n])
-				if e != nil {
-					exit(e)
-					return
-				}
-			}
-			if e != nil {
-				if e == io.EOF {
-					e = nil
-				} else {
-					e = fmt.Errorf("conn read packet error: %v", e)
-				}
-				exit(e)
-				return
-			}
-		}
-	}()
-
-	wg.Add(1)
-	go func() {
-		wg.Done()
-		var h ipv4.Header
-		for {
-			var buf [DefaultMTU]byte
-			n, e := iface.Read(buf[:])
-			if n > 0 {
-				packet := buf[:n]
-				e := parseIPv4Header(&h, packet)
-				if e != nil {
-					log.Printf("failed to parse ipv4 header %v", e)
-					goto ERR
-				}
-				if h.Version != 4 {
-					//log.Println("(debug) drop ip version 6")
-					goto ERR
-				}
-				log.Printf("(debug) iface recv: %s", &h)
-				_, e = writePacket(w, packet)
-				if err != nil {
-					exit(err)
-					return
-				}
-			}
-		ERR:
-			if e != nil {
-				if e == io.EOF {
-					e = nil
-				}
-				exit(e)
-				return
-			}
-		}
-	}()
-
-	wg.Wait()
-	return
+	})
 }
 
 // Close ...

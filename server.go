@@ -2,7 +2,6 @@ package camo
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -15,8 +14,8 @@ import (
 )
 
 const (
-	defaultIfaceSendChanSize   = 256
-	defaultSessionSendChanSize = 256
+	defaultServerIfaceWriteChanLen  = 256
+	defaultServerTunnelWriteChanLen = 256
 )
 
 var (
@@ -37,29 +36,24 @@ type Server struct {
 	cidSession map[string]*Session
 	ipSession  map[string]*Session
 
-	bufPool       sync.Pool
-	ifaceSendChan chan bufPacket
-	doneChan      chan struct{}
+	bufPool        sync.Pool
+	ifaceWriteChan chan []byte
+	doneChan       chan struct{}
 }
 
-type bufPacket struct {
-	b []byte
-	n int
-}
-
-func (s *Server) getIfaceSendChan() chan bufPacket {
+func (s *Server) getIfaceWriteChan() chan []byte {
 	s.mu.RLock()
-	if s.ifaceSendChan != nil {
+	if s.ifaceWriteChan != nil {
 		s.mu.RUnlock()
-		return s.ifaceSendChan
+		return s.ifaceWriteChan
 	}
 	s.mu.RUnlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.ifaceSendChan == nil {
-		s.ifaceSendChan = make(chan bufPacket, defaultIfaceSendChanSize)
+	if s.ifaceWriteChan == nil {
+		s.ifaceWriteChan = make(chan []byte, defaultServerIfaceWriteChanLen)
 	}
-	return s.ifaceSendChan
+	return s.ifaceWriteChan
 }
 
 func (s *Server) getDoneChan() chan struct{} {
@@ -93,104 +87,36 @@ func (s *Server) getBuffer() []byte {
 }
 
 func (s *Server) freeBuffer(b []byte) {
-	s.bufPool.Put(b)
+	s.bufPool.Put(b[:cap(b)])
 }
 
 // Serve ...
-func (s *Server) Serve(iface io.ReadWriteCloser) (err error) {
-	// 确保 exit 的 default part 在 Serve 函数内部一定会被执行
-	done := make(chan struct{})
-	exit := func(e error) {
+func (s *Server) Serve(iface io.ReadWriteCloser) error {
+	var h ipv4.Header
+	return serveIO(s.getDoneChan(), iface, s, s.getIfaceWriteChan(), func(_ <-chan struct{}, pkt []byte) (ok bool, _ error) {
+		if e := parseIPv4Header(&h, pkt); e != nil {
+			log.Printf("(debug) iface failed to parse ipv4 header %v", e)
+			return
+		}
+		if h.Version != 4 {
+			//log.Printf("(debug) iface drop ip version %d", h.Version)
+			return
+		}
+		log.Printf("(debug) iface recv: %s", &h)
+		ss, ok := s.findSessionByIP(h.Dst)
+		if !ok {
+			log.Printf("(debug) iface drop packet to %s: missing session", h.Dst)
+			return
+		}
 		select {
-		case <-done:
+		case ss.writeChan <- pkt:
+			ok = true
+			return
 		default:
-			close(done)
-			err = e
-			iface.Close()
+			log.Printf("(debug) iface drop packet to %s: channel full", h.Dst)
+			return
 		}
-	}
-
-	go func() {
-		srvDone := s.getDoneChan()
-		select {
-		case <-srvDone:
-			exit(nil)
-		case <-done:
-		}
-	}()
-
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		ifaceSend := s.getIfaceSendChan()
-		for {
-			select {
-			case pkt, ok := <-ifaceSend:
-				if !ok {
-					exit(nil)
-					return
-				}
-				_, e := iface.Write(pkt.b[:pkt.n])
-				s.freeBuffer(pkt.b)
-				if e != nil {
-					exit(e)
-					return
-				}
-			case <-done:
-				return
-			}
-		}
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		var h ipv4.Header
-		for {
-			buf := s.getBuffer()
-			freeBuf := true
-			n, e := iface.Read(buf)
-			if n > 0 {
-				e := parseIPv4Header(&h, buf[:n])
-				if e != nil {
-					log.Printf("(debug) iface failed to parse ipv4 header %v", e)
-					goto ERR
-				}
-				if h.Version != 4 {
-					//log.Println("(debug) drop ip version 6")
-					goto ERR
-				}
-				log.Printf("(debug) iface recv: %s", &h)
-				ss, ok := s.findSessionByIP(h.Dst)
-				if !ok {
-					log.Printf("(debug) iface drop packet to %s: missing session", h.Dst)
-					goto ERR
-				}
-				select {
-				case ss.send <- bufPacket{buf, n}:
-					freeBuf = false
-				default:
-					log.Printf("(debug) iface drop packet to %s: channel full", h.Dst)
-				}
-			}
-		ERR:
-			if freeBuf {
-				s.freeBuffer(buf)
-			}
-			if e != nil {
-				if e == io.EOF {
-					e = nil
-				}
-				exit(e)
-				return
-			}
-		}
-	}()
-
-	wg.Wait()
-	return
+	})
 }
 
 // Close ...
@@ -235,9 +161,9 @@ func (s *Server) RequestIPv4(cid string, reqIP net.IP) (ip net.IP, ttl time.Dura
 	}
 
 	ss = &Session{
-		cid:  cid,
-		ipv4: ip,
-		send: make(chan bufPacket, defaultSessionSendChanSize),
+		cid:       cid,
+		ipv4:      ip,
+		writeChan: make(chan []byte, defaultServerTunnelWriteChanLen),
 	}
 	s.cidSession[ss.cid] = ss
 	s.ipSession[ss.ipv4.String()] = ss
@@ -253,83 +179,34 @@ func (s *Server) Tunnel(cid string, rw io.ReadWriteCloser) (err error) {
 		return ErrSessionNotFound
 	}
 
-	// for flush
+	// flush
 	rw.Write(nil)
 
-	done := make(chan struct{})
-	exit := func(e error) {
-		select {
-		case <-done:
-		default:
-			close(done)
-			err = e
-			rw.Close()
-		}
-	}
+	log.Println("tunnel opened")
+	defer log.Println("tunnel closed")
 
-	go func() {
-		srvDone := s.getDoneChan()
-		select {
-		case <-srvDone:
-			exit(nil)
-		case <-done:
-		}
-	}()
-
-	go func() {
-		for {
-			select {
-			case pkt, ok := <-ss.send:
-				if !ok {
-					exit(nil)
-					return
-				}
-				_, e := writePacket(rw, pkt.b[:pkt.n])
-				s.freeBuffer(pkt.b)
-				if e != nil {
-					exit(e)
-					return
-				}
-			case <-done:
-				return
-			}
-		}
-	}()
-
-	ifaceSend := s.getIfaceSendChan()
-	var h ipv4.Header
-	for {
-		buf := s.getBuffer()
-		freeBuf := true
-		n, e := readPacket(buf, &h, rw)
-		if n > 0 {
-			log.Printf("(debug) conn recv: %s", &h)
-			if !h.Src.Equal(ss.ipv4) {
-				log.Printf("(debug) conn drop packet from %s: src (%s) mismatched", ss.ipv4, h.Src)
-				goto ERR
-			}
-			select {
-			case ifaceSend <- bufPacket{buf, n}:
-				freeBuf = false
-			case <-done:
-				s.freeBuffer(buf)
-				return
-			}
-		}
-	ERR:
-		if freeBuf {
-			s.freeBuffer(buf)
-		}
-		if e != nil {
-			if e != io.EOF {
-				e = nil
-			} else {
-				e = fmt.Errorf("conn read packet error: %v", e)
-			}
-			exit(e)
+	ifaceWrite := s.getIfaceWriteChan()
+	h := ipv4.Header{}
+	return serveIO(s.getDoneChan(), &packetIO{rw}, s, ss.writeChan, func(stop <-chan struct{}, pkt []byte) (ok bool, err error) {
+		err = parseIPv4Header(&h, pkt)
+		if err != nil {
+			log.Printf("(debug) tunnel failed to parse ipv4 header %v", err)
 			return
 		}
-	}
+		log.Printf("(debug) tunnel recv: %s", &h)
+		if !h.Src.Equal(ss.ipv4) {
+			log.Printf("(debug) tunnel drop packet from %s: src (%s) mismatched", ss.ipv4, h.Src)
+			return
+		}
+		select {
+		case ifaceWrite <- pkt:
+			ok = true
+			return
+		case <-stop:
+			s.freeBuffer(pkt)
+			return
+		}
+	})
 }
 
 // Handler ...
@@ -409,7 +286,7 @@ func (s *Server) Handler(prefix string) http.Handler {
 			return
 		}
 
-		err := s.Tunnel(cid, &httpReadWriteCloser{r.Body, w})
+		err := s.Tunnel(cid, &httpServerStream{r.Body, w})
 		if err != nil {
 			http.Error(w, err.Error(), GetStatusCode(err))
 			return
@@ -419,14 +296,14 @@ func (s *Server) Handler(prefix string) http.Handler {
 	return mux
 }
 
-type httpReadWriteCloser struct {
+type httpServerStream struct {
 	io.ReadCloser
 	w io.Writer
 }
 
-func (h *httpReadWriteCloser) Write(b []byte) (int, error) {
-	n, err := h.w.Write(b)
-	if f, ok := h.w.(http.Flusher); ok {
+func (s *httpServerStream) Write(b []byte) (int, error) {
+	n, err := s.w.Write(b)
+	if f, ok := s.w.(http.Flusher); ok {
 		f.Flush()
 	}
 	return n, err
