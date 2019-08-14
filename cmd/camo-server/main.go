@@ -76,7 +76,7 @@ func main() {
 
 	hsrv := http.Server{Addr: *addr}
 	if *useH2C {
-		hsrv.Handler = h2c.NewHandler(withLog(handler), &http2.Server{})
+		hsrv.Handler = h2c.NewHandler(withLog(log, handler), &http2.Server{})
 	} else {
 		certMgr := autocert.Manager{
 			Prompt:     autocert.AcceptTOS,
@@ -85,7 +85,7 @@ func main() {
 			Email:      *autocertEmail,
 		}
 		hsrv.TLSConfig = certMgr.TLSConfig()
-		hsrv.Handler = withLog(handler)
+		hsrv.Handler = withLog(log, handler)
 	}
 
 	exit := func(e error) {
@@ -128,9 +128,9 @@ func main() {
 	wg.Wait()
 }
 
-func withLog(h http.Handler) http.Handler {
+func withLog(log camo.Logger, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Println(r.Method, r.URL.String(), r.Proto, r.Header)
+		log.Debug(r.Method, r.URL.String(), r.Proto, r.Header)
 		h.ServeHTTP(w, r)
 	})
 }
