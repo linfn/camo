@@ -1,28 +1,33 @@
 package camo
 
 import (
-	"fmt"
 	"net"
+	"runtime"
+	"strconv"
 	"sync"
 
 	"github.com/songgao/water"
 )
 
-// TODO MTU
-
 // Iface ...
 type Iface struct {
 	*water.Interface
-	cidr      string
-	ip        net.IP
-	subnet    *net.IPNet
+	mtu       int
+	cidr4     string
+	ipv4      net.IP
+	subnet4   *net.IPNet
 	closeOnce sync.Once
 }
 
 // NewTun ...
-func NewTun() (*Iface, error) {
+func NewTun(mtu int) (*Iface, error) {
 	iface, err := water.New(water.Config{DeviceType: water.TUN})
 	if err != nil {
+		return nil, err
+	}
+	err = setIfaceUp(iface.Name(), mtu)
+	if err != nil {
+		iface.Close()
 		return nil, err
 	}
 	return &Iface{
@@ -30,46 +35,38 @@ func NewTun() (*Iface, error) {
 	}, nil
 }
 
-// Up ...
-func (i *Iface) Up(cidr string) error {
+// SetIPv4 ...
+func (i *Iface) SetIPv4(cidr string) error {
 	ip, subnet, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return err
 	}
-	err = setIfaceUp(i.Name(), cidr)
+	if i.ipv4 != nil {
+		delIfaceAddr(i.Name(), cidr)
+	}
+	err = addIfaceAddr(i.Name(), cidr)
 	if err != nil {
 		return err
 	}
-	i.cidr = cidr
-	i.ip = ip
-	i.subnet = subnet
+	i.cidr4 = cidr
+	i.ipv4 = ip
+	i.subnet4 = subnet
 	return nil
 }
 
-// Down ...
-func (i *Iface) Down() error {
-	if i.cidr != "" {
-		err := setIfaceDown(i.Name(), i.cidr)
-		i.ip = nil
-		i.subnet = nil
-		return err
-	}
-	return nil
+// CIDR4 ...
+func (i *Iface) CIDR4() string {
+	return i.cidr4
 }
 
-// CIDR ...
-func (i *Iface) CIDR() string {
-	return i.cidr
+// IPv4 ...
+func (i *Iface) IPv4() net.IP {
+	return i.ipv4
 }
 
-// IP ...
-func (i *Iface) IP() net.IP {
-	return i.ip
-}
-
-// Subnet ...
-func (i *Iface) Subnet() *net.IPNet {
-	return i.subnet
+// Subnet4 ...
+func (i *Iface) Subnet4() *net.IPNet {
+	return i.subnet4
 }
 
 // MTU ..
@@ -85,34 +82,71 @@ func (i *Iface) MTU() int {
 func (i *Iface) Close() error {
 	var err error
 	i.closeOnce.Do(func() {
-		i.Down()
 		err = i.Interface.Close()
 	})
 	return err
 }
 
-func setIfaceUp(dev string, cidr string) error {
-	err := runCmd("ip", "link", "set", dev, "up")
-	if err != nil {
-		return fmt.Errorf("ip link set %s up error: %v", dev, err)
+func setIfaceUp(dev string, mtu int) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return setIfaceUpBSD(dev, mtu)
+	default:
+		return setIfaceUpIPRoute2(dev, mtu)
 	}
-	if cidr != "" {
-		err = runCmd("ip", "addr", "add", cidr, "dev", dev)
-		if err != nil {
-			setIfaceDown(dev, "")
-			return fmt.Errorf("ip addr add %s dev %s error: %v", cidr, dev, err)
-		}
-	}
-	return nil
 }
 
-func setIfaceDown(dev string, cidr string) error {
-	if cidr != "" {
-		runCmd("ip", "addr", "del", cidr, "dev", dev)
+func addIfaceAddr(dev string, cidr string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return addIfaceAddrBSD(dev, cidr)
+	default:
+		return addIfaceAddrIPRoute2(dev, cidr)
 	}
-	err := runCmd("ip", "link", "set", dev, "down")
+}
+
+func delIfaceAddr(dev string, cidr string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return delIfaceAddrBSD(dev, cidr)
+	default:
+		return delIfaceAddrIPRoute2(dev, cidr)
+	}
+}
+
+func setIfaceUpIPRoute2(dev string, mtu int) error {
+	args := []string{"link", "set", dev, "up"}
+	if mtu != 0 {
+		args = append(args, "mtu", strconv.Itoa(mtu))
+	}
+	return runCmd("ip", args...)
+}
+
+func addIfaceAddrIPRoute2(dev string, cidr string) error {
+	return runCmd("ip", "address", "add", cidr, "dev", dev)
+}
+
+func delIfaceAddrIPRoute2(dev string, cidr string) error {
+	return runCmd("ip", "address", "del", cidr, "dev", dev)
+}
+
+func setIfaceUpBSD(dev string, mtu int) error {
+	args := []string{dev}
+	if mtu != 0 {
+		args = append(args, "mtu", strconv.Itoa(mtu))
+	}
+	args = append(args, "up")
+	return runCmd("ifconfig", args...)
+}
+
+func addIfaceAddrBSD(dev string, cidr string) error {
+	ip, subnet, err := net.ParseCIDR(cidr)
 	if err != nil {
-		return fmt.Errorf("ip link set %s down error: %v", dev, err)
+		return err
 	}
-	return nil
+	return runCmd("ifconfig", dev, ip.String(), ip.String(), "netmask", subnet.IP.String())
+}
+
+func delIfaceAddrBSD(dev string, cidr string) error {
+	return runCmd("ifconfig", dev, "inet", cidr, "-alias")
 }

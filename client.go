@@ -34,7 +34,7 @@ type Client struct {
 	Password    string
 	MTU         int
 	Conns       int
-	SetupRoute  func(dev string, devCIDR string, srvIP string) (reset func(), err error)
+	SetupTunnel func(localIP net.IP, remoteIP net.IP) (reset func(), err error)
 	Logger      Logger
 	UseH2C      bool
 
@@ -150,7 +150,7 @@ func (c *Client) h2Transport(resolvedAddr string) http.RoundTripper {
 }
 
 // Run ...
-func (c *Client) Run(iface *Iface) (err error) {
+func (c *Client) Run(iface io.ReadWriteCloser) (err error) {
 	defer iface.Close()
 
 	if c.CID == "" {
@@ -176,19 +176,12 @@ func (c *Client) Run(iface *Iface) (err error) {
 
 	log.Infof("client get ip (%s) ttl (%d)", ip, ttl)
 
-	err = iface.Up(ip.String() + "/32")
-	if err != nil {
-		return fmt.Errorf("set iface up error: %v", err)
-	}
-
-	log.Infof("%s(%s) up", iface.Name(), iface.CIDR())
-
-	if c.SetupRoute != nil {
-		resetRoute, err := c.SetupRoute(iface.Name(), iface.CIDR(), srvip)
+	if c.SetupTunnel != nil {
+		reset, err := c.SetupTunnel(ip, net.ParseIP(srvip))
 		if err != nil {
 			return fmt.Errorf("setup route error: %v", err)
 		}
-		defer resetRoute()
+		defer reset()
 	}
 
 	done := make(chan struct{})
@@ -362,6 +355,8 @@ func (c *Client) tunnel(stop <-chan struct{}, hc *http.Client) (err error) {
 	}
 
 	log := c.logger()
+	log.Info("tunnel opened")
+	defer log.Info("tunnel closed")
 
 	ifaceWriteChan := c.getIfaceWriteChan()
 	h := ipv4.Header{}

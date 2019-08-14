@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -17,6 +18,7 @@ import (
 var help = flag.Bool("h", false, "help")
 var password = flag.String("password", "", "password")
 var resolve = flag.String("resolve", "", "provide a custom address for a specific host and port pair")
+var mtu = flag.Int("mtu", camo.DefaultMTU, "mtu")
 var conns = flag.Int("conns", camo.DefaultConnCount, "connection count")
 var cid = flag.String("cid", "", "client unique identify")
 var logLevel = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
@@ -47,7 +49,7 @@ func main() {
 		log.Fatal("empty host")
 	}
 
-	iface, err := camo.NewTun()
+	iface, err := camo.NewTun(*mtu)
 	if err != nil {
 		log.Panic(err)
 	}
@@ -60,12 +62,20 @@ func main() {
 	c := camo.Client{
 		CID:         cid,
 		Host:        host,
-		Password:    *password,
-		Conns:       *conns,
-		SetupRoute:  camo.RedirectDefaultGateway,
-		Logger:      log,
 		ResolveAddr: *resolve,
+		Password:    *password,
+		MTU:         *mtu,
+		Conns:       *conns,
+		Logger:      log,
 		UseH2C:      *useH2C,
+		SetupTunnel: func(localIP net.IP, remoteIP net.IP) (reset func(), err error) {
+			err = iface.SetIPv4(localIP.String() + "/32")
+			if err != nil {
+				return nil, err
+			}
+			log.Infof("%s(%s) up", iface.Name(), iface.CIDR4())
+			return camo.RedirectGateway(iface.Name(), localIP.String(), remoteIP.String())
+		},
 	}
 
 	go func() {

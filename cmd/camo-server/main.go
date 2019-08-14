@@ -20,7 +20,8 @@ import (
 var help = flag.Bool("h", false, "help")
 var addr = flag.String("l", ":443", "listen address")
 var password = flag.String("password", "", "password")
-var ifaceIP = flag.String("ip", "10.20.0.1/24", "iface ip cidr")
+var ifaceIPv4 = flag.String("ipv4", "10.20.0.1/24", "iface ipv4 cidr")
+var mtu = flag.Int("mtu", camo.DefaultMTU, "mtu")
 var autocertHost = flag.String("autocert-host", "", "hostname")
 var autocertDir = flag.String("autocert-dir", ".certs", "cert cache directory")
 var autocertEmail = flag.String("autocert-email", "", "(optional) email address")
@@ -47,28 +48,29 @@ func main() {
 		}
 	}
 
-	iface, err := camo.NewTun()
+	iface, err := camo.NewTun(*mtu)
 	if err != nil {
 		log.Fatalf("failed to create tun device: %v", err)
 	}
 	defer iface.Close()
 
-	err = iface.Up(*ifaceIP)
+	err = iface.SetIPv4(*ifaceIPv4)
 	if err != nil {
 		log.Panic(err)
 	}
-	log.Infof("%s(%s) up", iface.Name(), iface.CIDR())
+	log.Infof("%s(%s) up", iface.Name(), iface.CIDR4())
 
-	resetNAT, err := camo.SetupNAT(iface.Subnet().String())
+	resetNAT, err := camo.SetupNAT(iface.Subnet4().String())
 	if err != nil {
 		log.Panic(err)
 	}
 	defer resetNAT()
 
 	srv := camo.Server{
+		MTU: *mtu,
 		IPv4Pool: camo.NewIPPool(&net.IPNet{
-			IP:   iface.IP(),
-			Mask: iface.Subnet().Mask,
+			IP:   iface.IPv4(),
+			Mask: iface.Subnet4().Mask,
 		}),
 		Logger: log,
 	}

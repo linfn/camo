@@ -2,20 +2,53 @@ package camo
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 )
 
 // GetRoute ...
-func GetRoute(ip string) (gateway string, dev string, src string, err error) {
-	b, err := runCmdOutput("ip", "route", "get", ip)
+func GetRoute(dst string) (gateway string, dev string, err error) {
+	switch runtime.GOOS {
+	case "darwin":
+		return getRouteBSD(dst)
+	default:
+		return getRouteIPRoute2(dst)
+	}
+}
+
+// AddRoute ...
+func AddRoute(dst string, gateway string, dev string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return addRouteBSD(dst, gateway, dev)
+	default:
+		return addRouteIPRoute2(dst, gateway, dev)
+	}
+}
+
+// DelRoute ...
+func DelRoute(dst string, gateway string, dev string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return delRouteBSD(dst, gateway, dev)
+	default:
+		return delRouteIPRoute2(dst, gateway, dev)
+	}
+}
+
+func getRouteIPRoute2(dst string) (gateway string, dev string, err error) {
+	b, err := runCmdOutput("ip", "route", "get", dst)
 	if err != nil {
-		return "", "", "", fmt.Errorf("ip route get %s error: %v", ip, err)
+		err = fmt.Errorf("ip route get %s error: %v", dst, err)
+		return
 	}
 	_, line, err := bufio.ScanLines(b, false)
 	if err != nil {
-		return "", "", "", fmt.Errorf("ip route get %s error: %v", ip, err)
+		err = fmt.Errorf("ip route get %s error: %v", dst, err)
+		return
 	}
 	fields := strings.Fields(string(line))
 
@@ -35,16 +68,16 @@ func GetRoute(ip string) (gateway string, dev string, src string, err error) {
 
 	dev, ok := getfield(fields, "dev")
 	if !ok {
-		return "", "", "", errors.New("route dev not found")
+		err = errors.New("route dev not found")
+		return
 	}
 	gateway, _ = getfield(fields, "via")
-	src, _ = getfield(fields, "src")
-	return gateway, dev, src, nil
+	//src, _ = getfield(fields, "src")
+	return gateway, dev, nil
 }
 
-// AddRoute ...
-func AddRoute(ip string, gateway string, dev string) error {
-	args := []string{"route", "add", ip}
+func addRouteIPRoute2(dst string, gateway string, dev string) error {
+	args := []string{"route", "add", dst}
 	if gateway != "" {
 		args = append(args, "via", gateway)
 	}
@@ -58,13 +91,71 @@ func AddRoute(ip string, gateway string, dev string) error {
 	return err
 }
 
-// DelRoute ...
-func DelRoute(ip string) error {
-	err := runCmd("ip", "route", "del", ip)
+func delRouteIPRoute2(dst string, gateway string, dev string) error {
+	args := []string{"route", "del", dst}
+	if gateway != "" {
+		args = append(args, "via", gateway)
+	}
+	if dev != "" {
+		args = append(args, "dev", dev)
+	}
+	err := runCmd("ip", args...)
 	if err != nil {
-		err = fmt.Errorf("ip route del %s error: %v", ip, err)
+		err = fmt.Errorf("ip %s error: %v", strings.Join(args, " "), err)
 	}
 	return err
+}
+
+func getRouteBSD(dst string) (gateway string, dev string, err error) {
+	b, err := runCmdOutput("route", "-n", "get", dst)
+	if err != nil {
+		err = fmt.Errorf("route get %s error: %v", dst, err)
+		return
+	}
+
+	getValue := func(line []byte) string {
+		fs := bytes.Fields(line)
+		if len(fs) <= 1 {
+			return ""
+		}
+		return string(fs[1])
+	}
+
+	for i := 0; i < len(b); {
+		n, line, e := bufio.ScanLines(b[i:], true)
+		if e != nil {
+			err = fmt.Errorf("ip route get %s error: %v", dst, e)
+			return
+		}
+		i += n
+		if bytes.Contains(line, []byte("gateway")) {
+			gateway = getValue(line)
+		} else if bytes.Contains(line, []byte("interface")) {
+			dev = getValue(line)
+		}
+	}
+	if dev == "" {
+		err = errors.New("route not found")
+		return
+	}
+	return gateway, dev, nil
+}
+
+func addRouteBSD(dst string, gateway string, _ string) error {
+	// If the destination is directly reachable via an interface, the -interface modifier should be specified.
+	err := runCmd("route", "-n", "add", "-net", dst, gateway)
+	if err != nil {
+		return fmt.Errorf("route add %s %s %s error: %v", dst, gateway, err)
+	}
+	return nil
+}
+
+func delRouteBSD(dst string, gateway string, _ string) error {
+	err := runCmd("route", "-n", "delete", "-net", dst, gateway)
+	if err != nil {
+		return fmt.Errorf("route del %s %s error: %v", dst, err)
+	}
+	return nil
 }
 
 // SetupNAT ...
@@ -79,9 +170,9 @@ func SetupNAT(src string) (cancel func(), err error) {
 	}, nil
 }
 
-// RedirectDefaultGateway 参考 https://www.tinc-vpn.org/examples/redirect-gateway/
-func RedirectDefaultGateway(dev string, devCIDR string, srvIP string) (reset func(), err error) {
-	oldGateway, oldDev, _, err := GetRoute(srvIP)
+// RedirectGateway 参考 https://www.tinc-vpn.org/examples/redirect-gateway/
+func RedirectGateway(dev string, devIP string, srvIP string) (reset func(), err error) {
+	oldGateway, oldDev, err := GetRoute(srvIP)
 	if err != nil {
 		return nil, err
 	}
@@ -106,11 +197,9 @@ func RedirectDefaultGateway(dev string, devCIDR string, srvIP string) (reset fun
 		if err != nil {
 			return
 		}
-		rollbacks = append(rollbacks, func() { DelRoute(ip) })
+		rollbacks = append(rollbacks, func() { DelRoute(ip, gateway, dev) })
 		return
 	}
-
-	devIP := strings.Split(devCIDR, "/")[0]
 
 	add(srvIP, oldGateway, oldDev)
 	add("0.0.0.0/1", devIP, dev)
