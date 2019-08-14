@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/denisbrodbeck/machineid"
@@ -18,7 +19,8 @@ var password = flag.String("password", "", "password")
 var resolve = flag.String("resolve", "", "provide a custom address for a specific host and port pair")
 var conns = flag.Int("conns", camo.DefaultConnCount, "connection count")
 var cid = flag.String("cid", "", "client unique identify")
-var useH2C = flag.Bool("h2c", false, "use h2c (for debug) ")
+var logLevel = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
+var useH2C = flag.Bool("h2c", false, "use h2c (for debug)")
 
 func usage() {
 	fmt.Printf("Usage: %s [OPTIONS] host\n", os.Args[0])
@@ -32,16 +34,22 @@ func main() {
 		flag.Usage()
 		return
 	}
+
+	logLevel, ok := camo.LogLevelValues[strings.ToUpper(*logLevel)]
+	if !ok {
+		log.Fatal("invalid log level")
+	}
+
+	log := camo.NewLogger(log.New(os.Stderr, "", log.LstdFlags|log.Llongfile), logLevel)
+
 	host := flag.Arg(0)
 	if host == "" {
 		log.Fatal("empty host")
 	}
 
-	log.SetFlags(log.LstdFlags | log.Llongfile)
-
 	iface, err := camo.NewTun()
 	if err != nil {
-		log.Panicln(err)
+		log.Panic(err)
 	}
 
 	cid := *cid
@@ -55,6 +63,7 @@ func main() {
 		Password:    *password,
 		Conns:       *conns,
 		SetupRoute:  camo.RedirectDefaultGateway,
+		Logger:      log,
 		ResolveAddr: *resolve,
 		UseH2C:      *useH2C,
 	}

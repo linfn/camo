@@ -78,3 +78,46 @@ func SetupNAT(src string) (cancel func(), err error) {
 		runCmd("iptables", "-t", "nat", "-D", "POSTROUTING", "-s", src, "-j", "MASQUERADE")
 	}, nil
 }
+
+// RedirectDefaultGateway 参考 https://www.tinc-vpn.org/examples/redirect-gateway/
+func RedirectDefaultGateway(dev string, devCIDR string, srvIP string) (reset func(), err error) {
+	oldGateway, oldDev, _, err := GetRoute(srvIP)
+	if err != nil {
+		return nil, err
+	}
+
+	var rollbacks []func()
+	rollback := func() {
+		for i := len(rollbacks) - 1; i >= 0; i-- {
+			rollbacks[i]()
+		}
+	}
+	defer func() {
+		if err != nil {
+			rollback()
+		}
+	}()
+
+	add := func(ip, gateway, dev string) {
+		if err != nil {
+			return
+		}
+		err = AddRoute(ip, gateway, dev)
+		if err != nil {
+			return
+		}
+		rollbacks = append(rollbacks, func() { DelRoute(ip) })
+		return
+	}
+
+	devIP := strings.Split(devCIDR, "/")[0]
+
+	add(srvIP, oldGateway, oldDev)
+	add("0.0.0.0/1", devIP, dev)
+	add("128.0.0.0/1", devIP, dev)
+
+	if err != nil {
+		return nil, err
+	}
+	return rollback, nil
+}

@@ -9,11 +9,9 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -37,6 +35,7 @@ type Client struct {
 	MTU         int
 	Conns       int
 	SetupRoute  func(dev string, devCIDR string, srvIP string) (reset func(), err error)
+	Logger      Logger
 	UseH2C      bool
 
 	mu              sync.Mutex
@@ -90,6 +89,13 @@ func (c *Client) getBuffer() []byte {
 
 func (c *Client) freeBuffer(b []byte) {
 	c.bufPool.Put(b[:cap(b)])
+}
+
+func (c *Client) logger() Logger {
+	if c.Logger == nil {
+		return (*LevelLogger)(nil)
+	}
+	return c.Logger
 }
 
 func (c *Client) resolveAddr() (string, error) {
@@ -151,12 +157,14 @@ func (c *Client) Run(iface *Iface) (err error) {
 		return errors.New("empty cid")
 	}
 
+	log := c.logger()
+
 	resolvedAddr, err := c.resolveAddr()
 	if err != nil {
 		return fmt.Errorf("failed to resolve host: %v", err)
 	}
 	srvip, _, _ := net.SplitHostPort(resolvedAddr)
-	log.Printf("server address is %s", resolvedAddr)
+	log.Infof("server address is %s", resolvedAddr)
 
 	hc := &http.Client{}
 	hc.Transport = c.h2Transport(resolvedAddr)
@@ -166,14 +174,14 @@ func (c *Client) Run(iface *Iface) (err error) {
 		return err
 	}
 
-	log.Printf("client get ip (%s) ttl (%d)", ip, ttl)
+	log.Infof("client get ip (%s) ttl (%d)", ip, ttl)
 
 	err = iface.Up(ip.String() + "/32")
 	if err != nil {
 		return fmt.Errorf("set iface up error: %v", err)
 	}
 
-	log.Printf("(debug) %s(%s) up", iface.Name(), iface.CIDR())
+	log.Infof("%s(%s) up", iface.Name(), iface.CIDR())
 
 	if c.SetupRoute != nil {
 		resetRoute, err := c.SetupRoute(iface.Name(), iface.CIDR(), srvip)
@@ -211,14 +219,14 @@ func (c *Client) Run(iface *Iface) (err error) {
 		h := ipv4.Header{}
 		e := serveIO(done, iface, c, c.getIfaceWriteChan(), func(stop <-chan struct{}, pkt []byte) (ok bool, err error) {
 			if e := parseIPv4Header(&h, pkt); e != nil {
-				log.Printf("iface failed to parse ipv4 header %v", e)
+				log.Warn("iface failed to parse ipv4 header:", e)
 				return
 			}
 			if h.Version != 4 {
-				//log.Printf("(debug) iface drop ip version %d", h.Version)
+				log.Tracef("iface drop ip version %d", h.Version)
 				return
 			}
-			log.Printf("(debug) iface recv: %s", &h)
+			log.Tracef("iface recv: %s", &h)
 			select {
 			case tunnelWriteChan <- pkt:
 				ok = true
@@ -353,14 +361,16 @@ func (c *Client) tunnel(stop <-chan struct{}, hc *http.Client) (err error) {
 		return
 	}
 
+	log := c.logger()
+
 	ifaceWriteChan := c.getIfaceWriteChan()
 	h := ipv4.Header{}
 	return serveIO(stop, &packetIO{&httpClientStream{res.Body, w}}, c, c.getTunnelWriteChan(), func(stop <-chan struct{}, pkt []byte) (ok bool, err error) {
 		if e := parseIPv4Header(&h, pkt); e != nil {
-			log.Printf("tunnel failed to parse ipv4 header %v", e)
+			log.Warn("tunnel failed to parse ipv4 header:", e)
 			return
 		}
-		log.Printf("(debug) tunnel recv: %s", &h)
+		log.Tracef("tunnel recv: %s", &h)
 		select {
 		case ifaceWriteChan <- pkt:
 			ok = true
@@ -379,47 +389,4 @@ func (c *Client) Close() {
 	default:
 		close(done)
 	}
-}
-
-// RedirectDefaultGateway 参考 https://www.tinc-vpn.org/examples/redirect-gateway/
-func RedirectDefaultGateway(dev string, devCIDR string, srvIP string) (reset func(), err error) {
-	oldGateway, oldDev, _, err := GetRoute(srvIP)
-	if err != nil {
-		return nil, err
-	}
-
-	var rollbacks []func()
-	rollback := func() {
-		for i := len(rollbacks) - 1; i >= 0; i-- {
-			rollbacks[i]()
-		}
-	}
-	defer func() {
-		if err != nil {
-			rollback()
-		}
-	}()
-
-	add := func(ip, gateway, dev string) {
-		if err != nil {
-			return
-		}
-		err = AddRoute(ip, gateway, dev)
-		if err != nil {
-			return
-		}
-		rollbacks = append(rollbacks, func() { DelRoute(ip) })
-		return
-	}
-
-	devIP := strings.Split(devCIDR, "/")[0]
-
-	add(srvIP, oldGateway, oldDev)
-	add("0.0.0.0/1", devIP, dev)
-	add("128.0.0.0/1", devIP, dev)
-
-	if err != nil {
-		return nil, err
-	}
-	return rollback, nil
 }

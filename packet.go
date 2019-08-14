@@ -10,8 +10,7 @@ import (
 	"golang.org/x/net/ipv6"
 )
 
-// DefaultMTU = 1500 - 20(ip header) - 20(tcp header) - 9(http2 frame header)
-// TODO DefaultMTU
+// DefaultMTU TODO
 const DefaultMTU = 1500
 
 var (

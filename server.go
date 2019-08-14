@@ -3,7 +3,6 @@ package camo
 import (
 	"encoding/json"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -20,17 +19,18 @@ const (
 
 var (
 	// ErrNoIPv4Config ...
-	ErrNoIPv4Config = Error(http.StatusBadRequest, "server no ipv4 config")
+	ErrNoIPv4Config = newError(http.StatusBadRequest, "server no ipv4 config")
 	// ErrIPExhausted ...
-	ErrIPExhausted = Error(http.StatusServiceUnavailable, "ip exhausted")
+	ErrIPExhausted = newError(http.StatusServiceUnavailable, "ip exhausted")
 	// ErrSessionNotFound ...
-	ErrSessionNotFound = Error(http.StatusBadRequest, "session not found")
+	ErrSessionNotFound = newError(http.StatusBadRequest, "session not found")
 )
 
 // Server ...
 type Server struct {
 	MTU      int
 	IPv4Pool *IPPool
+	Logger   Logger
 
 	mu         sync.RWMutex
 	cidSession map[string]*Session
@@ -90,22 +90,30 @@ func (s *Server) freeBuffer(b []byte) {
 	s.bufPool.Put(b[:cap(b)])
 }
 
+func (s *Server) logger() Logger {
+	if s.Logger == nil {
+		return (*LevelLogger)(nil)
+	}
+	return s.Logger
+}
+
 // Serve ...
 func (s *Server) Serve(iface io.ReadWriteCloser) error {
-	var h ipv4.Header
+	log := s.logger()
+	h := ipv4.Header{}
 	return serveIO(s.getDoneChan(), iface, s, s.getIfaceWriteChan(), func(_ <-chan struct{}, pkt []byte) (ok bool, _ error) {
 		if e := parseIPv4Header(&h, pkt); e != nil {
-			log.Printf("(debug) iface failed to parse ipv4 header %v", e)
+			log.Warn("iface failed to parse ipv4 header:", e)
 			return
 		}
 		if h.Version != 4 {
-			//log.Printf("(debug) iface drop ip version %d", h.Version)
+			log.Tracef("iface drop ip version %d", h.Version)
 			return
 		}
-		log.Printf("(debug) iface recv: %s", &h)
+		log.Tracef("iface recv: %s", &h)
 		ss, ok := s.findSessionByIP(h.Dst)
 		if !ok {
-			log.Printf("(debug) iface drop packet to %s: missing session", h.Dst)
+			log.Debugf("iface drop packet to %s: missing session", h.Dst)
 			return
 		}
 		select {
@@ -113,7 +121,7 @@ func (s *Server) Serve(iface io.ReadWriteCloser) error {
 			ok = true
 			return
 		default:
-			log.Printf("(debug) iface drop packet to %s: channel full", h.Dst)
+			log.Debugf("iface drop packet to %s: channel full", h.Dst)
 			return
 		}
 	})
@@ -132,7 +140,7 @@ func (s *Server) Close() {
 // RequestIPv4 ...
 func (s *Server) RequestIPv4(cid string, reqIP net.IP) (ip net.IP, ttl time.Duration, err error) {
 	if cid == "" {
-		err = Error(http.StatusBadRequest, "empty cid")
+		err = newError(http.StatusBadRequest, "empty cid")
 		return
 	}
 
@@ -182,20 +190,22 @@ func (s *Server) Tunnel(cid string, rw io.ReadWriteCloser) (err error) {
 	// flush
 	rw.Write(nil)
 
-	log.Println("tunnel opened")
-	defer log.Println("tunnel closed")
+	log := s.logger()
+
+	log.Info("tunnel opened")
+	defer log.Info("tunnel closed")
 
 	ifaceWrite := s.getIfaceWriteChan()
 	h := ipv4.Header{}
 	return serveIO(s.getDoneChan(), &packetIO{rw}, s, ss.writeChan, func(stop <-chan struct{}, pkt []byte) (ok bool, err error) {
 		err = parseIPv4Header(&h, pkt)
 		if err != nil {
-			log.Printf("(debug) tunnel failed to parse ipv4 header %v", err)
+			log.Warn("tunnel failed to parse ipv4 header:", err)
 			return
 		}
-		log.Printf("(debug) tunnel recv: %s", &h)
+		log.Tracef("tunnel recv: %s", &h)
 		if !h.Src.Equal(ss.ipv4) {
-			log.Printf("(debug) tunnel drop packet from %s: src (%s) mismatched", ss.ipv4, h.Src)
+			log.Warnf("tunnel drop packet from %s: src (%s) mismatched", ss.ipv4, h.Src)
 			return
 		}
 		select {
@@ -247,7 +257,7 @@ func (s *Server) Handler(prefix string) http.Handler {
 
 		ip, ttl, err := s.RequestIPv4(reqBody.CID, reqIP)
 		if err != nil {
-			http.Error(w, err.Error(), GetStatusCode(err))
+			http.Error(w, err.Error(), getStatusCode(err))
 			return
 		}
 
@@ -288,7 +298,7 @@ func (s *Server) Handler(prefix string) http.Handler {
 
 		err := s.Tunnel(cid, &httpServerStream{r.Body, w})
 		if err != nil {
-			http.Error(w, err.Error(), GetStatusCode(err))
+			http.Error(w, err.Error(), getStatusCode(err))
 			return
 		}
 	})

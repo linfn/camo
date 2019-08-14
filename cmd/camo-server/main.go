@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -23,6 +24,7 @@ var ifaceIP = flag.String("ip", "10.20.0.1/24", "iface ip cidr")
 var autocertHost = flag.String("autocert-host", "", "hostname")
 var autocertDir = flag.String("autocert-dir", ".certs", "cert cache directory")
 var autocertEmail = flag.String("autocert-email", "", "(optional) email address")
+var logLevel = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
 var useH2C = flag.Bool("h2c", false, "use h2c (for debug) ")
 
 func main() {
@@ -32,7 +34,12 @@ func main() {
 		return
 	}
 
-	log.SetFlags(log.LstdFlags | log.Llongfile)
+	logLevel, ok := camo.LogLevelValues[strings.ToUpper(*logLevel)]
+	if !ok {
+		log.Fatal("invalid log level")
+	}
+
+	log := camo.NewLogger(log.New(os.Stderr, "", log.LstdFlags|log.Llongfile), logLevel)
 
 	if !*useH2C {
 		if *autocertHost == "" {
@@ -48,13 +55,13 @@ func main() {
 
 	err = iface.Up(*ifaceIP)
 	if err != nil {
-		log.Panicln(err)
+		log.Panic(err)
 	}
-	log.Printf("(debug) %s(%s) up", iface.Name(), iface.CIDR())
+	log.Infof("%s(%s) up", iface.Name(), iface.CIDR())
 
 	resetNAT, err := camo.SetupNAT(iface.Subnet().String())
 	if err != nil {
-		log.Panicln(err)
+		log.Panic(err)
 	}
 	defer resetNAT()
 
@@ -63,6 +70,7 @@ func main() {
 			IP:   iface.IP(),
 			Mask: iface.Subnet().Mask,
 		}),
+		Logger: log,
 	}
 	handler := camo.WithAuth(srv.Handler(""), *password)
 
@@ -92,7 +100,7 @@ func main() {
 		exit(nil)
 	}()
 
-	log.Println("server start")
+	log.Info("server start")
 
 	var wg sync.WaitGroup
 

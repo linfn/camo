@@ -21,16 +21,14 @@ func (e *statusError) Error() string {
 	return http.StatusText(e.status)
 }
 
-// Error ...
-func Error(code int, msg ...interface{}) error {
+func newError(code int, msg ...interface{}) error {
 	return &statusError{
 		status: code,
 		msg:    fmt.Sprint(msg...),
 	}
 }
 
-// GetStatusCode ...
-func GetStatusCode(err error) int {
+func getStatusCode(err error) int {
 	if err == nil {
 		return http.StatusOK
 	}
