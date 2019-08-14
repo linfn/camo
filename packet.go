@@ -11,7 +11,7 @@ import (
 )
 
 // DefaultMTU TODO
-const DefaultMTU = 1500
+const DefaultMTU = 1400
 
 var (
 	errBadPacketRead = errors.New("bad packet read")
