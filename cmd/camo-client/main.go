@@ -19,7 +19,6 @@ var help = flag.Bool("h", false, "help")
 var password = flag.String("password", "", "password")
 var resolve = flag.String("resolve", "", "provide a custom address for a specific host and port pair")
 var mtu = flag.Int("mtu", camo.DefaultMTU, "mtu")
-var conns = flag.Int("conns", camo.DefaultConnCount, "connection count")
 var cid = flag.String("cid", "", "client unique identify")
 var logLevel = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
 var useH2C = flag.Bool("h2c", false, "use h2c (for debug)")
@@ -65,7 +64,6 @@ func main() {
 		ResolveAddr: *resolve,
 		Password:    *password,
 		MTU:         *mtu,
-		Conns:       *conns,
 		Logger:      log,
 		UseH2C:      *useH2C,
 		SetupTunnel: func(localIP net.IP, remoteIP net.IP) (reset func(), err error) {

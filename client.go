@@ -22,8 +22,6 @@ import (
 const (
 	defaultClientIfaceWriteChanLen  = 256
 	defaultClientTunnelWriteChanLen = 256
-	// DefaultConnCount ...
-	DefaultConnCount = 1
 )
 
 // Client ...
@@ -33,7 +31,6 @@ type Client struct {
 	ResolveAddr string
 	Password    string
 	MTU         int
-	Conns       int
 	SetupTunnel func(localIP net.IP, remoteIP net.IP) (reset func(), err error)
 	Logger      Logger
 	UseH2C      bool
@@ -231,23 +228,11 @@ func (c *Client) Run(iface io.ReadWriteCloser) (err error) {
 		exit(e)
 	}()
 
-	connCount := c.Conns
-	if connCount <= 0 {
-		connCount = DefaultConnCount
-	}
-	for i := 0; i < connCount; i++ {
-		hc := hc
-		// HTTP/2 client only have about one connection per host
-		if i > 0 {
-			hc = &http.Client{}
-			hc.Transport = c.h2Transport(resolvedAddr)
-		}
-		wg.Add(1)
-		go func(hc *http.Client) {
-			defer wg.Done()
-			exit(c.tunnel(done, hc))
-		}(hc)
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		exit(c.tunnel(done, hc))
+	}()
 
 	wg.Wait()
 	return
