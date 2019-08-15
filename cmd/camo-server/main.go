@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -66,13 +65,13 @@ func main() {
 	}
 	defer resetNAT()
 
+	ipv4Pool := camo.NewSubnetIPPool(iface.Subnet4(), 256)
+	ipv4Pool.Use(iface.IPv4())
+
 	srv := camo.Server{
-		MTU: *mtu,
-		IPv4Pool: camo.NewIPPool(&net.IPNet{
-			IP:   iface.IPv4(),
-			Mask: iface.Subnet4().Mask,
-		}),
-		Logger: log,
+		MTU:      *mtu,
+		IPv4Pool: ipv4Pool,
+		Logger:   log,
 	}
 	handler := camo.WithAuth(srv.Handler(""), *password)
 

@@ -20,18 +20,21 @@ const (
 )
 
 var (
-	// ErrNoIPv4Config ...
-	ErrNoIPv4Config = newError(http.StatusUnprocessableEntity, "no ipv4 config")
+	// ErrNoIPConfig ...
+	ErrNoIPConfig = newError(http.StatusUnprocessableEntity, "no ip config")
 	// ErrIPExhausted ...
 	ErrIPExhausted = newError(http.StatusServiceUnavailable, "ip exhausted")
 	// ErrIPConflict ...
 	ErrIPConflict = newError(http.StatusConflict, "ip conflict")
+	// ErrInvalidIP ...
+	ErrInvalidIP = newError(http.StatusBadRequest, "invalid ip address")
 )
 
 // Server ...
 type Server struct {
 	MTU      int
-	IPv4Pool *IPPool
+	IPv4Pool IPPool
+	IPv6Pool IPPool
 	Logger   Logger
 
 	mu             sync.RWMutex
@@ -196,6 +199,19 @@ func (s *Server) getOrCreateSession(ip net.IP, cid string) (*Session, error) {
 		return ss, nil
 	}
 
+	var ippool IPPool
+	if ip.To4() != nil {
+		ippool = s.IPv4Pool
+	} else {
+		ippool = s.IPv6Pool
+	}
+	if ippool == nil {
+		return nil, ErrNoIPConfig
+	}
+	if !ippool.Use(ip) {
+		return nil, ErrInvalidIP
+	}
+
 	return s.createSessionLocked(ip, cid), nil
 }
 
@@ -210,7 +226,7 @@ func (s *Server) RequestIPv4(cid string) (ip net.IP, ttl time.Duration, err erro
 	}
 
 	if s.IPv4Pool == nil {
-		err = ErrNoIPv4Config
+		err = ErrNoIPConfig
 		return
 	}
 
