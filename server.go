@@ -224,44 +224,39 @@ func (s *Server) RequestIPv4(cid string) (ip net.IP, ttl time.Duration, err erro
 	return ss.ip, ss.ttl, nil
 }
 
-// Tunnel ...
-func (s *Server) Tunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (err error) {
+// OpenTunnel ...
+func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(stop <-chan struct{}) error, error) {
 	ss, err := s.getOrCreateSession(ip, cid)
 	if err != nil {
-		rw.Close()
-		return err
+		return nil, err
 	}
-
-	// flush
-	rw.Write(nil)
-
-	log := s.logger()
-
-	log.Info("tunnel opened")
-	defer log.Info("tunnel closed")
-
-	ifaceWrite := s.getIfaceWriteChan()
-	h := ipv4.Header{}
-	return serveIO(s.getDoneChan(), &packetIO{rw}, s, ss.writeChan, func(stop <-chan struct{}, pkt []byte) (ok bool, err error) {
-		err = parseIPv4Header(&h, pkt)
-		if err != nil {
-			log.Warn("tunnel failed to parse ipv4 header:", err)
-			return
-		}
-		log.Tracef("tunnel recv: %s", &h)
-		if !h.Src.Equal(ss.ip) {
-			log.Warnf("tunnel drop packet from %s: src (%s) mismatched", ss.ip, h.Src)
-			return
-		}
-		select {
-		case ifaceWrite <- pkt:
-			ok = true
-			return
-		case <-stop:
-			s.freeBuffer(pkt)
-			return
-		}
-	})
+	return func(stop <-chan struct{}) error {
+		var (
+			log        = s.logger()
+			ifaceWrite = s.getIfaceWriteChan()
+			h          = ipv4.Header{}
+		)
+		return serveIO(stop, &packetIO{rw}, s, ss.writeChan, func(stop <-chan struct{}, pkt []byte) (ok bool, err error) {
+			err = parseIPv4Header(&h, pkt)
+			if err != nil {
+				log.Warn("tunnel failed to parse ipv4 header:", err)
+				return
+			}
+			log.Tracef("tunnel recv: %s", &h)
+			if !h.Src.Equal(ss.ip) {
+				log.Warnf("tunnel drop packet from %s: src (%s) mismatched", ss.ip, h.Src)
+				return
+			}
+			select {
+			case ifaceWrite <- pkt:
+				ok = true
+				return
+			case <-stop:
+				s.freeBuffer(pkt)
+				return
+			}
+		})
+	}, nil
 }
 
 // Handler ...
@@ -332,10 +327,25 @@ func (s *Server) Handler(prefix string) http.Handler {
 			return
 		}
 
-		err := s.Tunnel(ip, cid, &httpServerStream{r.Body, w})
+		tunnel, err := s.OpenTunnel(ip, cid, &httpServerStream{r.Body, w})
 		if err != nil {
 			http.Error(w, err.Error(), getStatusCode(err))
 			return
+		}
+
+		// flush the header frame
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+
+		log := s.logger()
+		log.Infof("tunnel %s opened, cid: %s, remote: %s", ip, cid, r.RemoteAddr)
+
+		err = tunnel(s.getDoneChan())
+		if err != nil {
+			log.Warnf("tunnel %s closed %v", ip, err)
+		} else {
+			log.Infof("tunnel %s closed", ip)
 		}
 	})
 

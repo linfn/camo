@@ -145,6 +145,32 @@ func (c *Client) h2Transport(resolvedAddr string) http.RoundTripper {
 	}
 }
 
+func (c *Client) serveIface(stop <-chan struct{}, iface io.ReadWriteCloser) error {
+	var (
+		log             = c.logger()
+		tunnelWriteChan = c.getTunnelWriteChan()
+		h               ipv4.Header
+	)
+	return serveIO(stop, iface, c, c.getIfaceWriteChan(), func(stop <-chan struct{}, pkt []byte) (ok bool, err error) {
+		if e := parseIPv4Header(&h, pkt); e != nil {
+			log.Warn("iface failed to parse ipv4 header:", e)
+			return
+		}
+		if h.Version != 4 {
+			log.Tracef("iface drop ip version %d", h.Version)
+			return
+		}
+		log.Tracef("iface recv: %s", &h)
+		select {
+		case tunnelWriteChan <- pkt:
+			ok = true
+			return
+		case <-stop:
+			return
+		}
+	})
+}
+
 // Run ...
 func (c *Client) Run(iface io.ReadWriteCloser) (err error) {
 	defer iface.Close()
@@ -172,9 +198,20 @@ func (c *Client) Run(iface io.ReadWriteCloser) (err error) {
 
 	log.Infof("client get ip (%s) ttl (%d)", ip, ttl)
 
+	tunnel, err := c.openTunnel(hc, ip)
+	if err != nil {
+		return err
+	}
+
+	log.Infof("tunnel %s opened", ip)
+	defer log.Infof("tunnel %s closed", ip)
+
 	if c.SetupTunnel != nil {
 		reset, err := c.SetupTunnel(ip, net.ParseIP(srvip))
 		if err != nil {
+			done := make(chan struct{})
+			close(done)
+			tunnel(done)
 			return fmt.Errorf("setup route error: %v", err)
 		}
 		defer reset()
@@ -204,33 +241,13 @@ func (c *Client) Run(iface io.ReadWriteCloser) (err error) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		tunnelWriteChan := c.getTunnelWriteChan()
-		h := ipv4.Header{}
-		e := serveIO(done, iface, c, c.getIfaceWriteChan(), func(stop <-chan struct{}, pkt []byte) (ok bool, err error) {
-			if e := parseIPv4Header(&h, pkt); e != nil {
-				log.Warn("iface failed to parse ipv4 header:", e)
-				return
-			}
-			if h.Version != 4 {
-				log.Tracef("iface drop ip version %d", h.Version)
-				return
-			}
-			log.Tracef("iface recv: %s", &h)
-			select {
-			case tunnelWriteChan <- pkt:
-				ok = true
-				return
-			case <-stop:
-				return
-			}
-		})
-		exit(e)
+		exit(tunnel(done))
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		exit(c.tunnel(done, hc, ip))
+		exit(c.serveIface(done, iface))
 	}()
 
 	wg.Wait()
@@ -300,7 +317,7 @@ func (s *httpClientStream) Close() error {
 	return err2
 }
 
-func (c *Client) tunnel(stop <-chan struct{}, hc *http.Client, ip net.IP) (err error) {
+func (c *Client) openTunnel(hc *http.Client, ip net.IP) (func(stop <-chan struct{}) error, error) {
 	r, w := io.Pipe()
 	req := &http.Request{
 		Method: "POST",
@@ -314,36 +331,33 @@ func (c *Client) tunnel(stop <-chan struct{}, hc *http.Client, ip net.IP) (err e
 	res, err := hc.Do(req.WithContext(context.TODO()))
 	if err != nil {
 		w.Close()
-		err = fmt.Errorf("failed to open tunnel, error: %v", err)
-		return
+		return nil, fmt.Errorf("failed to open tunnel, error: %v", err)
 	}
 	if res.StatusCode != http.StatusOK {
 		w.Close()
 		res.Body.Close()
-		err = fmt.Errorf("failed to open tunnel, status: %s", res.Status)
-		return
+		return nil, fmt.Errorf("failed to open tunnel, status: %s", res.Status)
 	}
 
-	log := c.logger()
-	log.Info("tunnel opened")
-	defer log.Info("tunnel closed")
-
-	ifaceWriteChan := c.getIfaceWriteChan()
-	h := ipv4.Header{}
-	return serveIO(stop, &packetIO{&httpClientStream{res.Body, w}}, c, c.getTunnelWriteChan(), func(stop <-chan struct{}, pkt []byte) (ok bool, err error) {
-		if e := parseIPv4Header(&h, pkt); e != nil {
-			log.Warn("tunnel failed to parse ipv4 header:", e)
-			return
-		}
-		log.Tracef("tunnel recv: %s", &h)
-		select {
-		case ifaceWriteChan <- pkt:
-			ok = true
-			return
-		case <-stop:
-			return
-		}
-	})
+	return func(stop <-chan struct{}) error {
+		log := c.logger()
+		ifaceWriteChan := c.getIfaceWriteChan()
+		h := ipv4.Header{}
+		return serveIO(stop, &packetIO{&httpClientStream{res.Body, w}}, c, c.getTunnelWriteChan(), func(stop <-chan struct{}, pkt []byte) (ok bool, err error) {
+			if e := parseIPv4Header(&h, pkt); e != nil {
+				log.Warn("tunnel failed to parse ipv4 header:", e)
+				return
+			}
+			log.Tracef("tunnel recv: %s", &h)
+			select {
+			case ifaceWriteChan <- pkt:
+				ok = true
+				return
+			case <-stop:
+				return
+			}
+		})
+	}, nil
 }
 
 // Close ...
