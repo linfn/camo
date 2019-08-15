@@ -17,6 +17,7 @@ const headerClientID = "camo-client-id"
 const (
 	defaultServerIfaceWriteChanLen  = 256
 	defaultServerTunnelWriteChanLen = 256
+	defaultSessionTTL               = time.Hour
 )
 
 var (
@@ -32,15 +33,16 @@ var (
 
 // Server ...
 type Server struct {
-	MTU      int
-	IPv4Pool IPPool
-	IPv6Pool IPPool
-	Logger   Logger
+	MTU        int
+	IPv4Pool   IPPool
+	IPv6Pool   IPPool
+	SessionTTL time.Duration
+	Logger     Logger
 
 	mu             sync.RWMutex
-	ipSession      map[string]*Session
-	cidIPv4Session map[string]*Session
-	cidIPv6Session map[string]*Session
+	ipSession      map[string]*session
+	cidIPv4Session map[string]*session
+	cidIPv6Session map[string]*session
 
 	bufPool        sync.Pool
 	ifaceWriteChan chan []byte
@@ -117,7 +119,7 @@ func (s *Server) Serve(iface io.ReadWriteCloser) error {
 			return
 		}
 		log.Tracef("iface recv: %s", &h)
-		ss, ok := s.getSessionByIP(h.Dst)
+		ss, ok := s.getSession(h.Dst)
 		if !ok {
 			log.Debugf("iface drop packet to %s: missing session", h.Dst)
 			return
@@ -143,55 +145,67 @@ func (s *Server) Close() {
 	}
 }
 
-func (s *Server) getIPv4SessionLocked(cid string) (*Session, bool) {
-	ss, ok := s.cidIPv4Session[cid]
-	return ss, ok
+func (s *Server) sessionTTL() time.Duration {
+	if s.SessionTTL == 0 {
+		return defaultSessionTTL
+	}
+	return s.SessionTTL
 }
 
-func (s *Server) getIPv6SessionLocked(cid string) (*Session, bool) {
-	ss, ok := s.cidIPv6Session[cid]
-	return ss, ok
-}
-
-func (s *Server) getSessionByIPLocked(ip net.IP) (*Session, bool) {
-	ss, ok := s.ipSession[ip.String()]
-	return ss, ok
-}
-
-func (s *Server) createSessionLocked(ip net.IP, cid string) *Session {
+func (s *Server) createSessionLocked(ip net.IP, cid string) *session {
 	if s.ipSession == nil {
-		s.ipSession = make(map[string]*Session)
-		s.cidIPv4Session = make(map[string]*Session)
-		s.cidIPv6Session = make(map[string]*Session)
+		s.ipSession = make(map[string]*session)
+		s.cidIPv4Session = make(map[string]*session)
+		s.cidIPv6Session = make(map[string]*session)
 	}
 
-	ss := &Session{
-		cid:       cid,
-		ip:        ip,
-		writeChan: make(chan []byte, defaultServerTunnelWriteChanLen),
-	}
-	s.ipSession[ss.ip.String()] = ss
+	log := s.logger()
 
+	ss := &session{
+		cid:        cid,
+		ip:         ip,
+		createTime: time.Now(),
+		writeChan:  make(chan []byte, defaultServerTunnelWriteChanLen),
+	}
+
+	startTimer := func() *time.Timer {
+		return time.AfterFunc(s.sessionTTL(), func() {
+			if ss.setDone() {
+				s.removeSession(ss.ip)
+				log.Debugf("session %s expired", ss.ip)
+			}
+		})
+	}
+	timer := startTimer()
+	ss.onRetained = func() {
+		timer.Stop()
+	}
+	ss.onReleased = func() {
+		timer = startTimer()
+	}
+
+	s.ipSession[ip.String()] = ss
 	if ip.To4() != nil {
-		s.cidIPv4Session[ss.cid] = ss
+		s.cidIPv4Session[cid] = ss
 	} else {
-		s.cidIPv6Session[ss.cid] = ss
+		s.cidIPv6Session[cid] = ss
 	}
 
 	return ss
 }
 
-func (s *Server) getSessionByIP(ip net.IP) (*Session, bool) {
+func (s *Server) getSession(ip net.IP) (*session, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.getSessionByIPLocked(ip)
+	ss, ok := s.ipSession[ip.String()]
+	return ss, ok
 }
 
-func (s *Server) getOrCreateSession(ip net.IP, cid string) (*Session, error) {
+func (s *Server) getOrCreateSession(ip net.IP, cid string) (*session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	ss, ok := s.getSessionByIPLocked(ip)
+	ss, ok := s.ipSession[ip.String()]
 	if ok {
 		if ss.cid != cid {
 			return nil, ErrIPConflict
@@ -208,11 +222,25 @@ func (s *Server) getOrCreateSession(ip net.IP, cid string) (*Session, error) {
 	if ippool == nil {
 		return nil, ErrNoIPConfig
 	}
-	if !ippool.Use(ip) {
+	if !ippool.Use(ip, cid) {
 		return nil, ErrInvalidIP
 	}
 
 	return s.createSessionLocked(ip, cid), nil
+}
+
+func (s *Server) removeSession(ip net.IP) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ss, ok := s.ipSession[ip.String()]
+	if ok {
+		delete(s.ipSession, ip.String())
+		if ip.To4() != nil {
+			delete(s.cidIPv4Session, ss.cid)
+		} else {
+			delete(s.cidIPv6Session, ss.cid)
+		}
+	}
 }
 
 // RequestIPv4 ...
@@ -220,9 +248,17 @@ func (s *Server) RequestIPv4(cid string) (ip net.IP, ttl time.Duration, err erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	ss, ok := s.getIPv4SessionLocked(cid)
+	getTTL := func(ttl time.Duration, idle time.Duration) time.Duration {
+		d := ttl - idle
+		if d < 0 {
+			return 0
+		}
+		return d
+	}
+
+	ss, ok := s.cidIPv4Session[cid]
 	if ok {
-		return ss.ip, ss.ttl, nil
+		return ss.ip, getTTL(s.sessionTTL(), ss.idleDuration()), nil
 	}
 
 	if s.IPv4Pool == nil {
@@ -230,14 +266,14 @@ func (s *Server) RequestIPv4(cid string) (ip net.IP, ttl time.Duration, err erro
 		return
 	}
 
-	ip, ok = s.IPv4Pool.Get()
+	ip, ok = s.IPv4Pool.Get(cid)
 	if !ok {
 		err = ErrIPExhausted
 		return
 	}
 
 	ss = s.createSessionLocked(ip, cid)
-	return ss.ip, ss.ttl, nil
+	return ip, s.sessionTTL(), nil
 }
 
 // OpenTunnel ...
@@ -247,6 +283,11 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 		return nil, err
 	}
 	return func(stop <-chan struct{}) error {
+		if !ss.retain() {
+			return newError(http.StatusUnprocessableEntity, "session expired")
+		}
+		defer ss.release()
+
 		var (
 			log        = s.logger()
 			ifaceWrite = s.getIfaceWriteChan()
@@ -359,7 +400,7 @@ func (s *Server) Handler(prefix string) http.Handler {
 
 		err = tunnel(s.getDoneChan())
 		if err != nil {
-			log.Warnf("tunnel %s closed %v", ip, err)
+			log.Infof("tunnel %s closed. %v", ip, err)
 		} else {
 			log.Infof("tunnel %s closed", ip)
 		}

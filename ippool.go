@@ -8,8 +8,8 @@ import (
 
 // IPPool assigns ip addresses
 type IPPool interface {
-	Get() (net.IP, bool)
-	Use(net.IP) bool
+	Get(cid string) (net.IP, bool)
+	Use(ip net.IP, cid string) bool
 	Free(net.IP)
 }
 
@@ -62,7 +62,7 @@ func NewSubnetIPPool(subnet *net.IPNet, limit int) *SubnetIPPool {
 }
 
 // Get ...
-func (p *SubnetIPPool) Get() (net.IP, bool) {
+func (p *SubnetIPPool) Get(_ string) (net.IP, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	size := len(p.bitmap)
@@ -77,7 +77,7 @@ func (p *SubnetIPPool) Get() (net.IP, bool) {
 }
 
 // Use ...
-func (p *SubnetIPPool) Use(ip net.IP) bool {
+func (p *SubnetIPPool) Use(ip net.IP, _ string) bool {
 	i := iptoi(ip, p.subnet)
 	if i < 0 || i >= len(p.bitmap) {
 		return false

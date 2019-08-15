@@ -66,7 +66,7 @@ func main() {
 	defer resetNAT()
 
 	ipv4Pool := camo.NewSubnetIPPool(iface.Subnet4(), 256)
-	ipv4Pool.Use(iface.IPv4())
+	ipv4Pool.Use(iface.IPv4(), "")
 
 	srv := camo.Server{
 		MTU:      *mtu,

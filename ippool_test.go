@@ -8,10 +8,10 @@ import (
 func TestSubnetIPPool(t *testing.T) {
 	_, subnet, _ := net.ParseCIDR("10.20.0.10/24")
 	ippool := NewSubnetIPPool(subnet, 0)
-	ippool.Use(net.ParseIP("10.20.0.10"))
+	ippool.Use(net.ParseIP("10.20.0.10"), "")
 	ips := map[string]net.IP{}
 	for {
-		ip, ok := ippool.Get()
+		ip, ok := ippool.Get("")
 		if !ok {
 			break
 		}
@@ -29,7 +29,7 @@ func TestSubnetIPPool(t *testing.T) {
 	}
 	ips = map[string]net.IP{}
 	for {
-		ip, ok := ippool.Get()
+		ip, ok := ippool.Get("")
 		if !ok {
 			break
 		}
@@ -39,7 +39,7 @@ func TestSubnetIPPool(t *testing.T) {
 		t.Fail()
 	}
 
-	if ippool.Use(net.ParseIP("10.30.0.10")) {
+	if ippool.Use(net.ParseIP("10.30.0.10"), "") {
 		t.Fail()
 	}
 	ippool.Free(net.ParseIP("10.30.0.10"))
