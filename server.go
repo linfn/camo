@@ -12,6 +12,8 @@ import (
 	"golang.org/x/net/ipv4"
 )
 
+const headerClientID = "camo-client-id"
+
 const (
 	defaultServerIfaceWriteChanLen  = 256
 	defaultServerTunnelWriteChanLen = 256
@@ -19,11 +21,11 @@ const (
 
 var (
 	// ErrNoIPv4Config ...
-	ErrNoIPv4Config = newError(http.StatusBadRequest, "server no ipv4 config")
+	ErrNoIPv4Config = newError(http.StatusUnprocessableEntity, "no ipv4 config")
 	// ErrIPExhausted ...
 	ErrIPExhausted = newError(http.StatusServiceUnavailable, "ip exhausted")
-	// ErrSessionNotFound ...
-	ErrSessionNotFound = newError(http.StatusBadRequest, "session not found")
+	// ErrIPConflict ...
+	ErrIPConflict = newError(http.StatusConflict, "ip conflict")
 )
 
 // Server ...
@@ -32,9 +34,10 @@ type Server struct {
 	IPv4Pool *IPPool
 	Logger   Logger
 
-	mu         sync.RWMutex
-	cidSession map[string]*Session
-	ipSession  map[string]*Session
+	mu             sync.RWMutex
+	ipSession      map[string]*Session
+	cidIPv4Session map[string]*Session
+	cidIPv6Session map[string]*Session
 
 	bufPool        sync.Pool
 	ifaceWriteChan chan []byte
@@ -111,7 +114,7 @@ func (s *Server) Serve(iface io.ReadWriteCloser) error {
 			return
 		}
 		log.Tracef("iface recv: %s", &h)
-		ss, ok := s.findSessionByIP(h.Dst)
+		ss, ok := s.getSessionByIP(h.Dst)
 		if !ok {
 			log.Debugf("iface drop packet to %s: missing session", h.Dst)
 			return
@@ -137,24 +140,73 @@ func (s *Server) Close() {
 	}
 }
 
-// RequestIPv4 ...
-func (s *Server) RequestIPv4(cid string, reqIP net.IP) (ip net.IP, ttl time.Duration, err error) {
-	if cid == "" {
-		err = newError(http.StatusBadRequest, "empty cid")
-		return
+func (s *Server) getIPv4SessionLocked(cid string) (*Session, bool) {
+	ss, ok := s.cidIPv4Session[cid]
+	return ss, ok
+}
+
+func (s *Server) getIPv6SessionLocked(cid string) (*Session, bool) {
+	ss, ok := s.cidIPv6Session[cid]
+	return ss, ok
+}
+
+func (s *Server) getSessionByIPLocked(ip net.IP) (*Session, bool) {
+	ss, ok := s.ipSession[ip.String()]
+	return ss, ok
+}
+
+func (s *Server) createSessionLocked(ip net.IP, cid string) *Session {
+	if s.ipSession == nil {
+		s.ipSession = make(map[string]*Session)
+		s.cidIPv4Session = make(map[string]*Session)
+		s.cidIPv6Session = make(map[string]*Session)
 	}
 
+	ss := &Session{
+		cid:       cid,
+		ip:        ip,
+		writeChan: make(chan []byte, defaultServerTunnelWriteChanLen),
+	}
+	s.ipSession[ss.ip.String()] = ss
+
+	if ip.To4() != nil {
+		s.cidIPv4Session[ss.cid] = ss
+	} else {
+		s.cidIPv6Session[ss.cid] = ss
+	}
+
+	return ss
+}
+
+func (s *Server) getSessionByIP(ip net.IP) (*Session, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.getSessionByIPLocked(ip)
+}
+
+func (s *Server) getOrCreateSession(ip net.IP, cid string) (*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.cidSession == nil {
-		s.cidSession = make(map[string]*Session)
-		s.ipSession = make(map[string]*Session)
+	ss, ok := s.getSessionByIPLocked(ip)
+	if ok {
+		if ss.cid != cid {
+			return nil, ErrIPConflict
+		}
+		return ss, nil
 	}
 
-	ss, ok := s.cidSession[cid]
+	return s.createSessionLocked(ip, cid), nil
+}
+
+// RequestIPv4 ...
+func (s *Server) RequestIPv4(cid string) (ip net.IP, ttl time.Duration, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ss, ok := s.getIPv4SessionLocked(cid)
 	if ok {
-		return ss.ipv4, 0, nil
+		return ss.ip, ss.ttl, nil
 	}
 
 	if s.IPv4Pool == nil {
@@ -168,23 +220,16 @@ func (s *Server) RequestIPv4(cid string, reqIP net.IP) (ip net.IP, ttl time.Dura
 		return
 	}
 
-	ss = &Session{
-		cid:       cid,
-		ipv4:      ip,
-		writeChan: make(chan []byte, defaultServerTunnelWriteChanLen),
-	}
-	s.cidSession[ss.cid] = ss
-	s.ipSession[ss.ipv4.String()] = ss
-
-	return ip, 0, nil
+	ss = s.createSessionLocked(ip, cid)
+	return ss.ip, ss.ttl, nil
 }
 
 // Tunnel ...
-func (s *Server) Tunnel(cid string, rw io.ReadWriteCloser) (err error) {
-	ss, ok := s.findSessionByCID(cid)
-	if !ok {
+func (s *Server) Tunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (err error) {
+	ss, err := s.getOrCreateSession(ip, cid)
+	if err != nil {
 		rw.Close()
-		return ErrSessionNotFound
+		return err
 	}
 
 	// flush
@@ -204,8 +249,8 @@ func (s *Server) Tunnel(cid string, rw io.ReadWriteCloser) (err error) {
 			return
 		}
 		log.Tracef("tunnel recv: %s", &h)
-		if !h.Src.Equal(ss.ipv4) {
-			log.Warnf("tunnel drop packet from %s: src (%s) mismatched", ss.ipv4, h.Src)
+		if !h.Src.Equal(ss.ip) {
+			log.Warnf("tunnel drop packet from %s: src (%s) mismatched", ss.ip, h.Src)
 			return
 		}
 		select {
@@ -222,40 +267,19 @@ func (s *Server) Tunnel(cid string, rw io.ReadWriteCloser) (err error) {
 // Handler ...
 func (s *Server) Handler(prefix string) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle(prefix+"/ip/v4", http.RedirectHandler(prefix+"/ip/v4/", http.StatusPermanentRedirect))
-	mux.HandleFunc(prefix+"/ip/v4/", func(w http.ResponseWriter, r *http.Request) {
-		path := strings.TrimPrefix(r.URL.Path, prefix+"/ip/v4/")
-		if strings.Contains(path, "/") {
-			http.NotFound(w, r)
-			return
-		}
+	mux.HandleFunc(prefix+"/ip/v4", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		}
 
-		var reqIP net.IP
-		if ip := path; len(ip) > 0 {
-			reqIP = net.ParseIP(ip)
-			if reqIP == nil {
-				http.Error(w, "Invalid ip", http.StatusBadRequest)
-				return
-			}
-		}
-
-		var reqBody struct {
-			CID string `json:"cid"`
-		}
-		err := json.NewDecoder(r.Body).Decode(&reqBody)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		} else if reqBody.CID == "" {
-			http.Error(w, "Empty cid", http.StatusBadRequest)
+		cid := r.Header.Get(headerClientID)
+		if cid == "" {
+			http.Error(w, "missing "+headerClientID, http.StatusBadRequest)
 			return
 		}
 
-		ip, ttl, err := s.RequestIPv4(reqBody.CID, reqIP)
+		ip, ttl, err := s.RequestIPv4(cid)
 		if err != nil {
 			http.Error(w, err.Error(), getStatusCode(err))
 			return
@@ -280,23 +304,35 @@ func (s *Server) Handler(prefix string) http.Handler {
 			http.Error(w, "HTTP/2.0 required", http.StatusUpgradeRequired)
 			return
 		}
-		path := strings.TrimPrefix(r.URL.Path, prefix+"/tunnel/")
-		if strings.Contains(path, "/") {
+
+		argIP := strings.TrimPrefix(r.URL.Path, prefix+"/tunnel/")
+		if strings.Contains(argIP, "/") {
 			http.NotFound(w, r)
 			return
 		}
+		ip := net.ParseIP(argIP)
+		if ip == nil {
+			http.Error(w, "invalid ip address", http.StatusBadRequest)
+			return
+		}
+		ip = ip.To4()
+		if ip == nil {
+			http.Error(w, "ipv4 address required", http.StatusBadRequest)
+			return
+		}
+
 		if r.Method != "POST" {
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		}
 
-		cid := path
+		cid := r.Header.Get(headerClientID)
 		if cid == "" {
-			http.Error(w, "Empty cid", http.StatusBadRequest)
+			http.Error(w, "missing header: "+headerClientID, http.StatusBadRequest)
 			return
 		}
 
-		err := s.Tunnel(cid, &httpServerStream{r.Body, w})
+		err := s.Tunnel(ip, cid, &httpServerStream{r.Body, w})
 		if err != nil {
 			http.Error(w, err.Error(), getStatusCode(err))
 			return

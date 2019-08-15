@@ -1,7 +1,6 @@
 package camo
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -166,7 +165,7 @@ func (c *Client) Run(iface io.ReadWriteCloser) (err error) {
 	hc := &http.Client{}
 	hc.Transport = c.h2Transport(resolvedAddr)
 
-	ip, ttl, err := c.reqIPv4(context.TODO(), hc, nil)
+	ip, ttl, err := c.reqIPv4(context.TODO(), hc)
 	if err != nil {
 		return err
 	}
@@ -231,7 +230,7 @@ func (c *Client) Run(iface io.ReadWriteCloser) (err error) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		exit(c.tunnel(done, hc))
+		exit(c.tunnel(done, hc, ip))
 	}()
 
 	wg.Wait()
@@ -246,32 +245,16 @@ func (c *Client) url(path string) *url.URL {
 	}
 }
 
-func (c *Client) reqIPv4(ctx context.Context, hc *http.Client, reqIP net.IP) (ip net.IP, ttl time.Duration, err error) {
-	var url *url.URL
-	if reqIP != nil {
-		url = c.url("/ip/v4/" + reqIP.String())
-	} else {
-		url = c.url("/ip/v4/")
-	}
-
-	reqBody, err := json.Marshal(&struct {
-		CID string `json:"cid"`
-	}{c.CID})
-	if err != nil {
-		return
-	}
-
+func (c *Client) reqIPv4(ctx context.Context, hc *http.Client) (ip net.IP, ttl time.Duration, err error) {
 	req := &http.Request{
 		Method: "POST",
-		URL:    url,
+		URL:    c.url("/ip/v4"),
 		Header: http.Header{
-			"Content-Type": []string{"application/json"},
+			headerClientID: []string{c.CID},
 		},
-		Body: ioutil.NopCloser(bytes.NewReader(reqBody)),
 	}
 	SetAuth(req, c.Password)
-	req.WithContext(ctx)
-	res, err := hc.Do(req)
+	res, err := hc.Do(req.WithContext(ctx))
 	if err != nil {
 		if err == context.Canceled || err == context.DeadlineExceeded {
 			return
@@ -317,16 +300,18 @@ func (s *httpClientStream) Close() error {
 	return err2
 }
 
-func (c *Client) tunnel(stop <-chan struct{}, hc *http.Client) (err error) {
+func (c *Client) tunnel(stop <-chan struct{}, hc *http.Client, ip net.IP) (err error) {
 	r, w := io.Pipe()
 	req := &http.Request{
 		Method: "POST",
-		URL:    c.url("/tunnel/" + c.CID),
-		Body:   ioutil.NopCloser(r),
+		URL:    c.url("/tunnel/" + ip.String()),
+		Header: http.Header{
+			headerClientID: []string{c.CID},
+		},
+		Body: ioutil.NopCloser(r),
 	}
 	SetAuth(req, c.Password)
-	req.WithContext(context.TODO())
-	res, err := hc.Do(req)
+	res, err := hc.Do(req.WithContext(context.TODO()))
 	if err != nil {
 		w.Close()
 		err = fmt.Errorf("failed to open tunnel, error: %v", err)

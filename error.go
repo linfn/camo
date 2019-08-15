@@ -32,7 +32,7 @@ func getStatusCode(err error) int {
 	if err == nil {
 		return http.StatusOK
 	}
-	if err, ok := err.(interface{ StatusCode() int }); ok {
+	if err, ok := err.(*statusError); ok {
 		return err.StatusCode()
 	}
 	return http.StatusInternalServerError

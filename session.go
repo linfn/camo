@@ -1,24 +1,14 @@
 package camo
 
-import "net"
+import (
+	"net"
+	"time"
+)
 
 // Session ...
 type Session struct {
-	cid  string
-	ipv4 net.IP
+	cid       string
+	ip        net.IP
+	ttl       time.Duration
 	writeChan chan []byte
-}
-
-func (s *Server) findSessionByCID(cid string) (*Session, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	ss, ok := s.cidSession[cid]
-	return ss, ok
-}
-
-func (s *Server) findSessionByIP(ip net.IP) (*Session, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	ss, ok := s.ipSession[ip.String()]
-	return ss, ok
 }
