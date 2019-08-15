@@ -145,7 +145,7 @@ func addRouteBSD(dst string, gateway string, _ string) error {
 	// If the destination is directly reachable via an interface, the -interface modifier should be specified.
 	err := runCmd("route", "-n", "add", "-net", dst, gateway)
 	if err != nil {
-		return fmt.Errorf("route add %s %s %s error: %v", dst, gateway, err)
+		return fmt.Errorf("route add %s %s error: %v", dst, gateway, err)
 	}
 	return nil
 }
@@ -153,7 +153,7 @@ func addRouteBSD(dst string, gateway string, _ string) error {
 func delRouteBSD(dst string, gateway string, _ string) error {
 	err := runCmd("route", "-n", "delete", "-net", dst, gateway)
 	if err != nil {
-		return fmt.Errorf("route del %s %s error: %v", dst, err)
+		return fmt.Errorf("route del %s %s error: %v", dst, gateway, err)
 	}
 	return nil
 }
