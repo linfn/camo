@@ -1,10 +1,11 @@
 package camo
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
-	"encoding/hex"
 	"net/http"
 	"strings"
 )
@@ -17,16 +18,24 @@ func WithAuth(h http.Handler, password string, log Logger) http.Handler {
 		log = (*LevelLogger)(nil) // log nothing
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user, mac, ok := GetAuth(r)
-		if !ok {
-			http.NotFound(w, r)
-			log.Infof("no auth info. method: %s, url: %s, remote: %s", r.Method, r.URL, r.RemoteAddr)
-			return
-		}
-		if HmacSha256(user, password) != mac {
-			http.NotFound(w, r)
-			log.Infof("auth declined. method: %s, url: %s, remote: %s", r.Method, r.URL, r.RemoteAddr)
-			return
+		if user, reqPass, ok := r.BasicAuth(); ok {
+			if user != "camo" || subtle.ConstantTimeCompare([]byte(reqPass), []byte(password)) != 1 {
+				http.NotFound(w, r)
+				log.Infof("basic auth declined. method: %s, url: %s, remote: %s", r.Method, r.URL, r.RemoteAddr)
+				return
+			}
+		} else {
+			text, mac, ok := GetAuth(r)
+			if !ok {
+				http.NotFound(w, r)
+				log.Infof("no auth info. method: %s, url: %s, remote: %s", r.Method, r.URL, r.RemoteAddr)
+				return
+			}
+			if subtle.ConstantTimeCompare(HmacSha256(text, password), mac) != 1 {
+				http.NotFound(w, r)
+				log.Infof("auth declined. method: %s, url: %s, remote: %s", r.Method, r.URL, r.RemoteAddr)
+				return
+			}
 		}
 		h.ServeHTTP(w, r)
 	})
@@ -37,12 +46,12 @@ func SetAuth(r *http.Request, password string) {
 	if r.Header == nil {
 		r.Header = http.Header{}
 	}
-	auth := "camo:" + HmacSha256("camo", password)
-	r.Header.Set("Authorization", camoAuthTypeHMAC+" "+base64.StdEncoding.EncodeToString([]byte(auth)))
+	auth := append([]byte("camo:"), HmacSha256("camo", password)...)
+	r.Header.Set("Authorization", camoAuthTypeHMAC+" "+base64.StdEncoding.EncodeToString(auth))
 }
 
 // GetAuth ...
-func GetAuth(r *http.Request) (user, hmac string, ok bool) {
+func GetAuth(r *http.Request) (text string, hmac []byte, ok bool) {
 	auth := r.Header.Get("Authorization")
 	if auth == "" {
 		return
@@ -55,17 +64,16 @@ func GetAuth(r *http.Request) (user, hmac string, ok bool) {
 	if err != nil {
 		return
 	}
-	cs := string(c)
-	s := strings.IndexByte(cs, ':')
-	if s < 0 {
+	i := bytes.IndexByte(c, ':')
+	if i < 0 {
 		return
 	}
-	return cs[:s], cs[s+1:], true
+	return string(c[:i]), c[i+1:], true
 }
 
 // HmacSha256 ...
-func HmacSha256(text string, password string) string {
+func HmacSha256(text string, password string) []byte {
 	m := hmac.New(sha256.New, []byte(password))
 	m.Write([]byte(text))
-	return hex.EncodeToString(m.Sum(nil))
+	return m.Sum(nil)
 }
