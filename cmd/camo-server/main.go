@@ -77,6 +77,8 @@ func main() {
 		Logger:   log,
 	}
 
+	expvar.Publish("camo", srv.Metrics())
+
 	mux := http.NewServeMux()
 	mux.Handle("/", withLog(log, srv.Handler("")))
 	mux.Handle("/debug/vars", expvar.Handler())

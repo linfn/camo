@@ -86,7 +86,12 @@ type bufferPool interface {
 	freeBuffer([]byte)
 }
 
-func serveIO(stop <-chan struct{}, rw io.ReadWriteCloser, bp bufferPool, toWrite <-chan []byte, handler func(stop <-chan struct{}, pkt []byte) (bool, error)) (err error) {
+type (
+	readPacketHandler      func(stop <-chan struct{}, pkt []byte) bool
+	postWritePacketHandler func(stop <-chan struct{}, err error)
+)
+
+func serveIO(stop <-chan struct{}, rw io.ReadWriteCloser, bp bufferPool, readHandler readPacketHandler, toWrite <-chan []byte, postWriteHandler postWritePacketHandler) (err error) {
 	done := make(chan struct{})
 	exit := func(e error) {
 		select {
@@ -115,12 +120,14 @@ func serveIO(stop <-chan struct{}, rw io.ReadWriteCloser, bp bufferPool, toWrite
 			select {
 			case pkt, ok := <-toWrite:
 				if !ok {
-					bp.freeBuffer(pkt)
 					exit(nil)
 					return
 				}
 				_, e := rw.Write(pkt)
 				bp.freeBuffer(pkt)
+				if postWriteHandler != nil {
+					postWriteHandler(stop, e)
+				}
 				if e != nil {
 					exit(e)
 					return
@@ -138,13 +145,9 @@ func serveIO(stop <-chan struct{}, rw io.ReadWriteCloser, bp bufferPool, toWrite
 			b := bp.getBuffer()
 			n, e := rw.Read(b)
 			if n > 0 {
-				ok, e := handler(done, b[:n])
+				ok := readHandler(done, b[:n])
 				if !ok {
 					bp.freeBuffer(b)
-				}
-				if e != nil {
-					exit(e)
-					return
 				}
 			} else {
 				bp.freeBuffer(b)

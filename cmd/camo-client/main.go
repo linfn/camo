@@ -1,7 +1,7 @@
 package main
 
 import (
-	_ "expvar"
+	"expvar"
 	"flag"
 	"fmt"
 	"log"
@@ -91,6 +91,8 @@ func main() {
 			return camo.RedirectGateway(iface.Name(), localIP.String(), remoteIP.String())
 		},
 	}
+
+	expvar.Publish("camo", c.Metrics())
 
 	go func() {
 		s := make(chan os.Signal)

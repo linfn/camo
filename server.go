@@ -47,6 +47,9 @@ type Server struct {
 	bufPool        sync.Pool
 	ifaceWriteChan chan []byte
 	doneChan       chan struct{}
+
+	metrics     *Metrics
+	metricsOnce sync.Once
 }
 
 func (s *Server) getIfaceWriteChan() chan []byte {
@@ -88,10 +91,12 @@ func (s *Server) mtu() int {
 
 func (s *Server) getBuffer() []byte {
 	b := s.bufPool.Get()
-	if b == nil {
-		return make([]byte, s.mtu())
+	if b != nil {
+		return b.([]byte)
 	}
-	return b.([]byte)
+	buf := make([]byte, s.mtu())
+	s.Metrics().BufferSize.Add(int64(len(buf)))
+	return buf
 }
 
 func (s *Server) freeBuffer(b []byte) {
@@ -105,11 +110,23 @@ func (s *Server) logger() Logger {
 	return s.Logger
 }
 
+// Metrics ...
+func (s *Server) Metrics() *Metrics {
+	s.metricsOnce.Do(func() {
+		s.metrics = NewMetrics()
+	})
+	return s.metrics
+}
+
 // Serve ...
 func (s *Server) Serve(iface io.ReadWriteCloser) error {
-	log := s.logger()
-	h := ipv4.Header{}
-	return serveIO(s.getDoneChan(), iface, s, s.getIfaceWriteChan(), func(_ <-chan struct{}, pkt []byte) (ok bool, _ error) {
+	var (
+		log     = s.logger()
+		metrics = s.Metrics()
+		rw      = WithIOMetric(iface, metrics.Iface)
+		h       ipv4.Header
+	)
+	return serveIO(s.getDoneChan(), rw, s, func(_ <-chan struct{}, pkt []byte) (ok bool) {
 		if e := parseIPv4Header(&h, pkt); e != nil {
 			log.Warn("iface failed to parse ipv4 header:", e)
 			return
@@ -127,12 +144,14 @@ func (s *Server) Serve(iface io.ReadWriteCloser) error {
 		select {
 		case ss.writeChan <- pkt:
 			ok = true
+			metrics.Tunnels.Lags.Add(1)
 			return
 		default:
+			metrics.Tunnels.Drops.Add(1)
 			log.Debugf("iface drop packet to %s: channel full", h.Dst)
 			return
 		}
-	})
+	}, s.getIfaceWriteChan(), nil)
 }
 
 // Close ...
@@ -282,18 +301,23 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 	if err != nil {
 		return nil, err
 	}
+
 	return func(stop <-chan struct{}) error {
 		if !ss.retain() {
 			return newError(http.StatusUnprocessableEntity, "session expired")
 		}
 		defer ss.release()
 
+		metrics := s.Metrics()
+		rw = WithIOMetric(&packetIO{rw}, metrics.Tunnels.IOMetric)
+		postWrite := func(<-chan struct{}, error) { metrics.Tunnels.Lags.Add(-1) }
+
 		var (
 			log        = s.logger()
 			ifaceWrite = s.getIfaceWriteChan()
-			h          = ipv4.Header{}
+			h          ipv4.Header
 		)
-		return serveIO(stop, &packetIO{rw}, s, ss.writeChan, func(stop <-chan struct{}, pkt []byte) (ok bool, err error) {
+		return serveIO(stop, rw, s, func(stop <-chan struct{}, pkt []byte) (ok bool) {
 			err = parseIPv4Header(&h, pkt)
 			if err != nil {
 				log.Warn("tunnel failed to parse ipv4 header:", err)
@@ -312,7 +336,7 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 				s.freeBuffer(pkt)
 				return
 			}
-		})
+		}, ss.writeChan, postWrite)
 	}, nil
 }
 
