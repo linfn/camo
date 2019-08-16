@@ -21,6 +21,7 @@ import (
 var help = flag.Bool("h", false, "help")
 var addr = flag.String("listen", ":443", "listen address")
 var password = flag.String("password", "", "password")
+var noPassword = flag.Bool("no-password", false, "no password")
 var ifaceIPv4 = flag.String("ipv4", "10.20.0.1/24", "iface ipv4 cidr")
 var mtu = flag.Int("mtu", camo.DefaultMTU, "mtu")
 var autocertHost = flag.String("autocert-host", "", "hostname")
@@ -48,6 +49,10 @@ func main() {
 		if *autocertHost == "" {
 			log.Fatal("missing autocert-host")
 		}
+	}
+
+	if !*noPassword && *password == "" {
+		log.Fatal("missing password")
 	}
 
 	iface, err := camo.NewTun(*mtu)
@@ -86,7 +91,12 @@ func main() {
 		handlePProf(mux)
 	}
 
-	handler := camo.WithAuth(mux, *password, log)
+	var handler http.Handler
+	if *noPassword {
+		handler = mux
+	} else {
+		handler = camo.WithAuth(mux, *password, log)
+	}
 
 	hsrv := http.Server{Addr: *addr}
 	if *useH2C {
