@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -62,10 +63,12 @@ func main() {
 		CID:         cid,
 		Host:        host,
 		ResolveAddr: *resolve,
-		Password:    *password,
-		MTU:         *mtu,
-		Logger:      log,
-		UseH2C:      *useH2C,
+		Auth: func(r *http.Request) {
+			camo.SetAuth(r, *password)
+		},
+		MTU:    *mtu,
+		Logger: log,
+		UseH2C: *useH2C,
 		SetupTunnel: func(localIP net.IP, remoteIP net.IP) (reset func(), err error) {
 			err = iface.SetIPv4(localIP.String() + "/32")
 			if err != nil {

@@ -28,7 +28,7 @@ type Client struct {
 	CID         string
 	Host        string
 	ResolveAddr string
-	Password    string
+	Auth        func(r *http.Request)
 	MTU         int
 	SetupTunnel func(localIP net.IP, remoteIP net.IP) (reset func(), err error)
 	Logger      Logger
@@ -262,6 +262,12 @@ func (c *Client) url(path string) *url.URL {
 	}
 }
 
+func (c *Client) setAuth(r *http.Request) {
+	if c.Auth != nil {
+		c.Auth(r)
+	}
+}
+
 func (c *Client) reqIPv4(ctx context.Context, hc *http.Client) (ip net.IP, ttl time.Duration, err error) {
 	req := &http.Request{
 		Method: "POST",
@@ -270,7 +276,7 @@ func (c *Client) reqIPv4(ctx context.Context, hc *http.Client) (ip net.IP, ttl t
 			headerClientID: []string{c.CID},
 		},
 	}
-	SetAuth(req, c.Password)
+	c.setAuth(req)
 	res, err := hc.Do(req.WithContext(ctx))
 	if err != nil {
 		if err == context.Canceled || err == context.DeadlineExceeded {
@@ -327,7 +333,7 @@ func (c *Client) openTunnel(hc *http.Client, ip net.IP) (func(stop <-chan struct
 		},
 		Body: ioutil.NopCloser(r),
 	}
-	SetAuth(req, c.Password)
+	c.setAuth(req)
 	res, err := hc.Do(req.WithContext(context.TODO()))
 	if err != nil {
 		w.Close()

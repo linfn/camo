@@ -73,7 +73,7 @@ func main() {
 		IPv4Pool: ipv4Pool,
 		Logger:   log,
 	}
-	handler := camo.WithAuth(srv.Handler(""), *password)
+	handler := camo.WithAuth(srv.Handler(""), *password, log)
 
 	hsrv := http.Server{Addr: *addr}
 	if *useH2C {
