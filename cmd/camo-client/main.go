@@ -1,11 +1,13 @@
 package main
 
 import (
+	_ "expvar"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
@@ -23,6 +25,8 @@ var mtu = flag.Int("mtu", camo.DefaultMTU, "mtu")
 var cid = flag.String("cid", "", "client unique identify")
 var logLevel = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
 var useH2C = flag.Bool("h2c", false, "use h2c (for debug)")
+var debug = flag.Bool("debug", false, "enable metric")
+var debugListen = flag.String("debug-listen", "localhost:6060", "debug http server listen address")
 
 func usage() {
 	fmt.Printf("Usage: %s [OPTIONS] host\n", os.Args[0])
@@ -47,6 +51,15 @@ func main() {
 	host := flag.Arg(0)
 	if host == "" {
 		log.Fatal("empty host")
+	}
+
+	if *debug {
+		go func() {
+			err := http.ListenAndServe(*debugListen, nil)
+			if err != http.ErrServerClosed {
+				log.Errorf("debug http server exited: %v", err)
+			}
+		}()
 	}
 
 	iface, err := camo.NewTun(*mtu)

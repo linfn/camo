@@ -1,9 +1,11 @@
 package main
 
 import (
+	"expvar"
 	"flag"
 	"log"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
@@ -17,7 +19,7 @@ import (
 )
 
 var help = flag.Bool("h", false, "help")
-var addr = flag.String("l", ":443", "listen address")
+var addr = flag.String("listen", ":443", "listen address")
 var password = flag.String("password", "", "password")
 var ifaceIPv4 = flag.String("ipv4", "10.20.0.1/24", "iface ipv4 cidr")
 var mtu = flag.Int("mtu", camo.DefaultMTU, "mtu")
@@ -25,7 +27,8 @@ var autocertHost = flag.String("autocert-host", "", "hostname")
 var autocertDir = flag.String("autocert-dir", ".certs", "cert cache directory")
 var autocertEmail = flag.String("autocert-email", "", "(optional) email address")
 var logLevel = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
-var useH2C = flag.Bool("h2c", false, "use h2c (for debug) ")
+var useH2C = flag.Bool("h2c", false, "use h2c (for debug)")
+var enablePProf = flag.Bool("pprof", false, "enable pprof")
 
 func main() {
 	flag.Parse()
@@ -73,11 +76,19 @@ func main() {
 		IPv4Pool: ipv4Pool,
 		Logger:   log,
 	}
-	handler := camo.WithAuth(srv.Handler(""), *password, log)
+
+	mux := http.NewServeMux()
+	mux.Handle("/", withLog(log, srv.Handler("")))
+	mux.Handle("/debug/vars", expvar.Handler())
+	if *enablePProf {
+		handlePProf(mux)
+	}
+
+	handler := camo.WithAuth(mux, *password, log)
 
 	hsrv := http.Server{Addr: *addr}
 	if *useH2C {
-		hsrv.Handler = h2c.NewHandler(withLog(log, handler), &http2.Server{})
+		hsrv.Handler = h2c.NewHandler(handler, &http2.Server{})
 	} else {
 		certMgr := autocert.Manager{
 			Prompt:     autocert.AcceptTOS,
@@ -86,7 +97,7 @@ func main() {
 			Email:      *autocertEmail,
 		}
 		hsrv.TLSConfig = certMgr.TLSConfig()
-		hsrv.Handler = withLog(log, handler)
+		hsrv.Handler = handler
 	}
 
 	exit := func(e error) {
@@ -134,4 +145,12 @@ func withLog(log camo.Logger, h http.Handler) http.Handler {
 		log.Debug(r.Method, r.URL.String(), r.Proto, r.Header)
 		h.ServeHTTP(w, r)
 	})
+}
+
+func handlePProf(mux *http.ServeMux) {
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 }
