@@ -144,6 +144,7 @@ func (s *Server) Serve(iface io.ReadWriteCloser) error {
 		select {
 		case ss.writeChan <- pkt:
 			ok = true
+			ss.lags.Add(1)
 			metrics.Tunnels.Lags.Add(1)
 			return
 		default:
@@ -259,6 +260,7 @@ func (s *Server) removeSession(ip net.IP) {
 		} else {
 			delete(s.cidIPv6Session, ss.cid)
 		}
+		s.Metrics().Tunnels.Lags.Add(-ss.lags.Value())
 	}
 }
 
@@ -309,8 +311,14 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 		defer ss.release()
 
 		metrics := s.Metrics()
+		metrics.Tunnels.Streams.Add(1)
+		defer metrics.Tunnels.Streams.Add(-1)
+
 		rw = WithIOMetric(&packetIO{rw}, metrics.Tunnels.IOMetric)
-		postWrite := func(<-chan struct{}, error) { metrics.Tunnels.Lags.Add(-1) }
+		postWrite := func(<-chan struct{}, error) {
+			ss.lags.Add(-1)
+			metrics.Tunnels.Lags.Add(-1)
+		}
 
 		var (
 			log        = s.logger()

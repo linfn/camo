@@ -257,13 +257,21 @@ func (c *Client) Run(iface io.ReadWriteCloser) (err error) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		exit(tunnel(done))
+		err := tunnel(done)
+		if err != nil {
+			err = fmt.Errorf("tunnel exited: %v", err)
+		}
+		exit(err)
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		exit(c.serveIface(done, iface))
+		err := c.serveIface(done, iface)
+		if err != nil {
+			err = fmt.Errorf("serve iface exited: %v", err)
+		}
+		exit(err)
 	}()
 
 	wg.Wait()

@@ -1,6 +1,7 @@
 package camo
 
 import (
+	"expvar"
 	"net"
 	"sync"
 	"time"
@@ -19,6 +20,8 @@ type session struct {
 	onReleased   func()
 	retainedTime time.Time
 	releasedTime time.Time
+
+	lags expvar.Int
 }
 
 func (s *session) retain() bool {

@@ -33,14 +33,16 @@ func NewIOMetric() *IOMetric {
 // TunnelMetrics ...
 type TunnelMetrics struct {
 	*IOMetric
-	Lags  *MetricInt `json:"lags"`
-	Drops *MetricInt `json:"drops"`
+	Streams *MetricInt `json:"streams"`
+	Lags    *MetricInt `json:"lags"`
+	Drops   *MetricInt `json:"drops"`
 }
 
 // NewTunnelMetrics ...
 func NewTunnelMetrics() *TunnelMetrics {
 	return &TunnelMetrics{
 		IOMetric: NewIOMetric(),
+		Streams:  new(MetricInt),
 		Lags:     new(MetricInt),
 		Drops:    new(MetricInt),
 	}
