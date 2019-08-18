@@ -89,18 +89,23 @@ func (s *Server) mtu() int {
 	return s.MTU
 }
 
-func (s *Server) getBuffer() []byte {
-	b := s.bufPool.Get()
-	if b != nil {
-		return b.([]byte)
+func (s *Server) getBuffer() (b []byte) {
+	metrics := s.Metrics().Buffer
+	v := s.bufPool.Get()
+	if v != nil {
+		b = v.([]byte)
+	} else {
+		b = make([]byte, s.mtu())
+		metrics.TotalBytes.Add(int64(len(b)))
 	}
-	buf := make([]byte, s.mtu())
-	s.Metrics().BufferSize.Add(int64(len(buf)))
-	return buf
+	metrics.InUseBytes.Add(int64(len(b)))
+	return b
 }
 
 func (s *Server) freeBuffer(b []byte) {
-	s.bufPool.Put(b[:cap(b)])
+	b = b[:cap(b)]
+	s.bufPool.Put(b)
+	s.Metrics().Buffer.InUseBytes.Add(-int64(len(b)))
 }
 
 func (s *Server) logger() Logger {

@@ -48,19 +48,33 @@ func NewTunnelMetrics() *TunnelMetrics {
 	}
 }
 
+// BufferPoolMetrics ...
+type BufferPoolMetrics struct {
+	InUseBytes *MetricInt `json:"in_use_bytes"`
+	TotalBytes *MetricInt `json:"total_bytes"`
+}
+
+// NewBufferPoolMetrics ...
+func NewBufferPoolMetrics() *BufferPoolMetrics {
+	return &BufferPoolMetrics{
+		InUseBytes: new(MetricInt),
+		TotalBytes: new(MetricInt),
+	}
+}
+
 // Metrics ...
 type Metrics struct {
-	Iface      *IOMetric      `json:"iface"`
-	Tunnels    *TunnelMetrics `json:"tunnels"`
-	BufferSize *MetricInt     `json:"buffer_size"`
+	Iface   *IOMetric          `json:"iface"`
+	Tunnels *TunnelMetrics     `json:"tunnels"`
+	Buffer  *BufferPoolMetrics `json:"buffer"`
 }
 
 // NewMetrics ...
 func NewMetrics() *Metrics {
 	return &Metrics{
-		Iface:      NewIOMetric(),
-		Tunnels:    NewTunnelMetrics(),
-		BufferSize: new(MetricInt),
+		Iface:   NewIOMetric(),
+		Tunnels: NewTunnelMetrics(),
+		Buffer:  NewBufferPoolMetrics(),
 	}
 }
 
