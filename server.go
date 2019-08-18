@@ -143,7 +143,7 @@ func (s *Server) Serve(iface io.ReadWriteCloser) error {
 		log.Tracef("iface recv: %s", &h)
 		ss, ok := s.getSession(h.Dst)
 		if !ok {
-			log.Debugf("iface drop packet to %s: missing session", h.Dst)
+			log.Tracef("iface drop packet to %s: missing session", h.Dst)
 			return
 		}
 		select {
@@ -153,7 +153,7 @@ func (s *Server) Serve(iface io.ReadWriteCloser) error {
 			return
 		default:
 			metrics.Tunnels.Drops.Add(1)
-			log.Debugf("iface drop packet to %s: channel full", h.Dst)
+			log.Tracef("iface drop packet to %s: channel full", h.Dst)
 			return
 		}
 	}, s.getIfaceWriteChan(), nil)

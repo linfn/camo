@@ -21,11 +21,10 @@ import (
 var help = flag.Bool("h", false, "help")
 var addr = flag.String("listen", ":443", "listen address")
 var password = flag.String("password", "", "password")
-var noPassword = flag.Bool("no-password", false, "no password")
 var ifaceIPv4 = flag.String("ipv4", "10.20.0.1/24", "iface ipv4 cidr")
 var mtu = flag.Int("mtu", camo.DefaultMTU, "mtu")
 var autocertHost = flag.String("autocert-host", "", "hostname")
-var autocertDir = flag.String("autocert-dir", ".certs", "cert cache directory")
+var autocertDir = flag.String("autocert-dir", defaultCertDir(), "cert cache directory")
 var autocertEmail = flag.String("autocert-email", "", "(optional) email address")
 var logLevel = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
 var useH2C = flag.Bool("h2c", false, "use h2c (for debug)")
@@ -51,8 +50,12 @@ func main() {
 		}
 	}
 
-	if !*noPassword && *password == "" {
-		log.Fatal("missing password")
+	password := *password
+	if password == "" {
+		password = os.Getenv("CAMO_PASSWORD")
+		if password == "" {
+			log.Fatal("missing password")
+		}
 	}
 
 	iface, err := camo.NewTun(*mtu)
@@ -91,12 +94,7 @@ func main() {
 		handlePProf(mux)
 	}
 
-	var handler http.Handler
-	if *noPassword {
-		handler = mux
-	} else {
-		handler = camo.WithAuth(mux, *password, log)
-	}
+	handler := camo.WithAuth(mux, password, log)
 
 	hsrv := http.Server{Addr: *addr}
 	if *useH2C {
@@ -150,6 +148,18 @@ func main() {
 	}()
 
 	wg.Wait()
+}
+
+func camoDir() string {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return ".camo"
+	}
+	return dir + "/camo"
+}
+
+func defaultCertDir() string {
+	return camoDir() + "/certs"
 }
 
 func withLog(log camo.Logger, h http.Handler) http.Handler {

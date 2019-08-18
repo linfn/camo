@@ -7,6 +7,10 @@ RUN apt-get update && apt-get install -y iproute2 iptables
 
 WORKDIR /camo
 
+ENV CAMO_PASSWORD=
+ENV CAMO_HOST=
+ENV CAMO_LOG_LEVEL=debug
+
 EXPOSE 443
 
 CMD [ "./docker-dev-entrypoint.sh" ]
