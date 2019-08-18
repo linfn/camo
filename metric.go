@@ -50,14 +50,14 @@ func NewTunnelMetrics() *TunnelMetrics {
 
 // BufferPoolMetrics ...
 type BufferPoolMetrics struct {
-	InUseBytes *MetricInt `json:"in_use_bytes"`
+	FreeBytes  *MetricInt `json:"free_bytes"`
 	TotalBytes *MetricInt `json:"total_bytes"`
 }
 
 // NewBufferPoolMetrics ...
 func NewBufferPoolMetrics() *BufferPoolMetrics {
 	return &BufferPoolMetrics{
-		InUseBytes: new(MetricInt),
+		FreeBytes:  new(MetricInt),
 		TotalBytes: new(MetricInt),
 	}
 }

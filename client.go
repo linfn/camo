@@ -79,22 +79,21 @@ func (c *Client) mtu() int {
 }
 
 func (c *Client) getBuffer() (b []byte) {
-	metrics := c.Metrics().Buffer
 	v := c.bufPool.Get()
 	if v != nil {
 		b = v.([]byte)
+		c.Metrics().Buffer.FreeBytes.Add(-int64(len(b)))
 	} else {
 		b = make([]byte, c.mtu())
-		metrics.TotalBytes.Add(int64(len(b)))
+		c.Metrics().Buffer.TotalBytes.Add(int64(len(b)))
 	}
-	metrics.InUseBytes.Add(int64(len(b)))
 	return b
 }
 
 func (c *Client) freeBuffer(b []byte) {
 	b = b[:cap(b)]
 	c.bufPool.Put(b)
-	c.Metrics().Buffer.InUseBytes.Add(-int64(len(b)))
+	c.Metrics().Buffer.FreeBytes.Add(int64(len(b)))
 }
 
 func (c *Client) logger() Logger {
@@ -376,6 +375,9 @@ func (c *Client) openTunnel(hc *http.Client, ip net.IP) (func(stop <-chan struct
 	}
 
 	return func(stop <-chan struct{}) error {
+		c.Metrics().Tunnels.Streams.Add(1)
+		defer c.Metrics().Tunnels.Streams.Add(-1)
+
 		var (
 			log            = c.logger()
 			metrics        = c.Metrics()

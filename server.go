@@ -90,22 +90,21 @@ func (s *Server) mtu() int {
 }
 
 func (s *Server) getBuffer() (b []byte) {
-	metrics := s.Metrics().Buffer
 	v := s.bufPool.Get()
 	if v != nil {
 		b = v.([]byte)
+		s.Metrics().Buffer.FreeBytes.Add(-int64(len(b)))
 	} else {
 		b = make([]byte, s.mtu())
-		metrics.TotalBytes.Add(int64(len(b)))
+		s.Metrics().Buffer.TotalBytes.Add(int64(len(b)))
 	}
-	metrics.InUseBytes.Add(int64(len(b)))
 	return b
 }
 
 func (s *Server) freeBuffer(b []byte) {
 	b = b[:cap(b)]
 	s.bufPool.Put(b)
-	s.Metrics().Buffer.InUseBytes.Add(-int64(len(b)))
+	s.Metrics().Buffer.FreeBytes.Add(int64(len(b)))
 }
 
 func (s *Server) logger() Logger {
@@ -150,7 +149,6 @@ func (s *Server) Serve(iface io.ReadWriteCloser) error {
 		select {
 		case ss.writeChan <- pkt:
 			retainBuf = true
-			ss.lags.Add(1)
 			metrics.Tunnels.Lags.Add(1)
 			return
 		default:
@@ -266,7 +264,20 @@ func (s *Server) removeSession(ip net.IP) {
 		} else {
 			delete(s.cidIPv6Session, ss.cid)
 		}
-		s.Metrics().Tunnels.Lags.Add(-ss.lags.Value())
+		metrics := s.Metrics()
+	LOOP:
+		for {
+			select {
+			case pkt, ok := <-ss.writeChan:
+				if !ok {
+					break LOOP
+				}
+				s.freeBuffer(pkt)
+				metrics.Tunnels.Lags.Add(-1)
+			default:
+				break LOOP
+			}
+		}
 	}
 }
 
@@ -321,10 +332,7 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 		defer metrics.Tunnels.Streams.Add(-1)
 
 		rw = WithIOMetric(&packetIO{rw}, metrics.Tunnels.IOMetric)
-		postWrite := func(<-chan struct{}, error) {
-			ss.lags.Add(-1)
-			metrics.Tunnels.Lags.Add(-1)
-		}
+		postWrite := func(<-chan struct{}, error) { metrics.Tunnels.Lags.Add(-1) }
 
 		var (
 			log        = s.logger()
