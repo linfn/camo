@@ -12,11 +12,13 @@ import (
 // Iface ...
 type Iface struct {
 	*water.Interface
-	mtu       int
-	cidr4     string
-	ipv4      net.IP
-	subnet4   *net.IPNet
+	mtu     int
+	cidr4   string
+	ipv4    net.IP
+	subnet4 *net.IPNet
+
 	closeOnce sync.Once
+	closeErr  error
 }
 
 // NewTun ...
@@ -80,11 +82,10 @@ func (i *Iface) MTU() int {
 
 // Close ...
 func (i *Iface) Close() error {
-	var err error
 	i.closeOnce.Do(func() {
-		err = i.Interface.Close()
+		i.closeErr = i.Interface.Close()
 	})
-	return err
+	return i.closeErr
 }
 
 func setIfaceUp(dev string, mtu int) error {
