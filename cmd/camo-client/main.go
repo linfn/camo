@@ -1,9 +1,14 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"expvar"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -15,18 +20,20 @@ import (
 
 	"github.com/denisbrodbeck/machineid"
 	"github.com/linfn/camo"
-	"github.com/rs/xid"
 )
 
-var help = flag.Bool("h", false, "help")
-var password = flag.String("password", "", "password")
-var resolve = flag.String("resolve", "", "provide a custom address for a specific host and port pair")
-var mtu = flag.Int("mtu", camo.DefaultMTU, "mtu")
-var cid = flag.String("cid", "", "client unique identify")
-var logLevel = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
-var useH2C = flag.Bool("h2c", false, "use h2c (for debug)")
-var debug = flag.Bool("debug", false, "enable metric")
-var debugListen = flag.String("debug-listen", "localhost:6060", "debug http server listen address")
+var camoDir = getCamoDir()
+
+var (
+	help        = flag.Bool("h", false, "help")
+	password    = flag.String("password", "", "Set a password. It is recommended to use the environment variable CAMO_PASSWORD to set the password.")
+	resolve     = flag.String("resolve", "", "provide a custom address for a specific host and port pair")
+	mtu         = flag.Int("mtu", camo.DefaultMTU, "mtu")
+	logLevel    = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
+	useH2C      = flag.Bool("h2c", false, "use h2c (for debug)")
+	debug       = flag.Bool("debug", false, "enable metric")
+	debugListen = flag.String("debug-listen", "localhost:6060", "debug http server listen address")
+)
 
 func usage() {
 	fmt.Printf("Usage: %s [OPTIONS] host\n", os.Args[0])
@@ -62,22 +69,20 @@ func main() {
 		}()
 	}
 
+	cid := ensureCID(host, log)
+
 	iface, err := camo.NewTun(*mtu)
 	if err != nil {
-		log.Panic(err)
+		log.Fatalf("failed to create tun device: %v", err)
 	}
-
-	cid := *cid
-	if cid == "" {
-		cid = getCID(host)
-	}
+	defer iface.Close()
 
 	c := camo.Client{
 		CID:         cid,
 		Host:        host,
 		ResolveAddr: *resolve,
 		Auth: func(r *http.Request) {
-			camo.SetAuth(r, *password)
+			camo.SetAuth(r, getPassword())
 		},
 		MTU:    *mtu,
 		Logger: log,
@@ -107,10 +112,58 @@ func main() {
 	}
 }
 
-func getCID(srvAddr string) string {
-	id, err := machineid.ProtectedID("camo@" + srvAddr)
+func getCamoDir() string {
+	dir, err := os.UserCacheDir()
+	if err == nil {
+		return dir + "/camo"
+	}
+	return ".camo"
+}
+
+func ensureCamoDir() {
+	err := os.MkdirAll(camoDir, os.ModePerm)
+	if err != nil {
+		log.Panicf("failed to create camo dir. path: %s, error: %v", camoDir, err)
+	}
+}
+
+func getPassword() string {
+	p := *password
+	if p != "" {
+		return p
+	}
+	return os.Getenv("CAMO_PASSWORD")
+}
+
+func ensureCID(host string, log camo.Logger) string {
+	id, err := machineid.ProtectedID("camo@" + host)
 	if err == nil {
 		return id
 	}
-	return xid.New().String()
+	log.Warnf("failed to get protected machineid: %v", err)
+
+	cidFile := camoDir + "/cid"
+
+	b, err := ioutil.ReadFile(cidFile)
+	if err != nil && !os.IsNotExist(err) {
+		log.Fatalf("failed to read cid file. path: %s, error: %v", cidFile, err)
+	}
+	if len(b) == 0 {
+		b = make([]byte, 32)
+		if _, err = rand.Read(b); err != nil {
+			log.Fatalf("failed to generate rand: %v", err)
+		}
+		ensureCamoDir()
+		err = ioutil.WriteFile(cidFile, b, os.ModePerm)
+		if err != nil {
+			log.Fatalf("failed to save cid file. path: %s, error: %v", cidFile, err)
+		}
+		log.Debugf("cid file saved. path: %s", cidFile)
+	}
+
+	log.Debugf("load cid from %s", cidFile)
+
+	mac := hmac.New(sha256.New, b)
+	mac.Write([]byte("camo@" + host))
+	return hex.EncodeToString(mac.Sum(nil))
 }

@@ -18,17 +18,24 @@ import (
 	"golang.org/x/net/http2/h2c"
 )
 
-var help = flag.Bool("h", false, "help")
-var addr = flag.String("listen", ":443", "listen address")
-var password = flag.String("password", "", "password")
-var ifaceIPv4 = flag.String("ipv4", "10.20.0.1/24", "iface ipv4 cidr")
-var mtu = flag.Int("mtu", camo.DefaultMTU, "mtu")
-var autocertHost = flag.String("autocert-host", "", "hostname")
-var autocertDir = flag.String("autocert-dir", defaultCertDir(), "cert cache directory")
-var autocertEmail = flag.String("autocert-email", "", "(optional) email address")
-var logLevel = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
-var useH2C = flag.Bool("h2c", false, "use h2c (for debug)")
-var enablePProf = flag.Bool("pprof", false, "enable pprof")
+var (
+	camoDir        = getCamoDir()
+	defaultCertDir = camoDir + "/certs"
+)
+
+var (
+	help          = flag.Bool("h", false, "help")
+	addr          = flag.String("listen", ":443", "listen address")
+	password      = flag.String("password", "", "Set a password. It is recommended to use the environment variable CAMO_PASSWORD to set the password.")
+	ifaceIPv4     = flag.String("ipv4", "10.20.0.1/24", "iface ipv4 cidr")
+	mtu           = flag.Int("mtu", camo.DefaultMTU, "mtu")
+	autocertHost  = flag.String("autocert-host", "", "hostname")
+	autocertDir   = flag.String("autocert-dir", defaultCertDir, "cert cache directory")
+	autocertEmail = flag.String("autocert-email", "", "(optional) email address")
+	logLevel      = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
+	useH2C        = flag.Bool("h2c", false, "use h2c (for debug)")
+	enablePProf   = flag.Bool("pprof", false, "enable pprof")
+)
 
 func main() {
 	flag.Parse()
@@ -50,12 +57,9 @@ func main() {
 		}
 	}
 
-	password := *password
+	password := getPassword()
 	if password == "" {
-		password = os.Getenv("CAMO_PASSWORD")
-		if password == "" {
-			log.Fatal("missing password")
-		}
+		log.Fatal("missing password")
 	}
 
 	iface, err := camo.NewTun(*mtu)
@@ -150,16 +154,27 @@ func main() {
 	wg.Wait()
 }
 
-func camoDir() string {
+func getCamoDir() string {
 	dir, err := os.UserCacheDir()
-	if err != nil {
-		return ".camo"
+	if err == nil {
+		return dir + "/camo"
 	}
-	return dir + "/camo"
+	return ".camo"
 }
 
-func defaultCertDir() string {
-	return camoDir() + "/certs"
+func ensureCamoDir() {
+	err := os.MkdirAll(camoDir, os.ModePerm)
+	if err != nil {
+		log.Panicf("failed to create camo dir. path: %s, error: %v", camoDir, err)
+	}
+}
+
+func getPassword() string {
+	p := *password
+	if p != "" {
+		return p
+	}
+	return os.Getenv("CAMO_PASSWORD")
 }
 
 func withLog(log camo.Logger, h http.Handler) http.Handler {
