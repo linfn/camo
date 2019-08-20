@@ -190,7 +190,7 @@ func (c *Client) resolveAddrLocked() (*net.TCPAddr, error) {
 		}
 		c.cacheAddr = tcpAddr
 	}
-	c.logger().Info("server address is %s", c.cacheAddr)
+	c.logger().Infof("server address is %s", c.cacheAddr)
 	return c.cacheAddr, nil
 }
 
