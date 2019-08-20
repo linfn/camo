@@ -12,7 +12,8 @@ import (
 // Iface ...
 type Iface struct {
 	*water.Interface
-	mtu     int
+	mtu int
+
 	cidr4   string
 	ipv4    net.IP
 	subnet4 *net.IPNet
@@ -37,15 +38,25 @@ func NewTun(mtu int) (*Iface, error) {
 	}, nil
 }
 
+// MTU ...
+func (i *Iface) MTU() int {
+	ifi, err := net.InterfaceByName(i.Name())
+	if err != nil {
+		return 0
+	}
+	return ifi.MTU
+}
+
 // SetIPv4 ...
 func (i *Iface) SetIPv4(cidr string) error {
+	if cidr == "" {
+		return i.delIPv4()
+	}
 	ip, subnet, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return err
 	}
-	if i.ipv4 != nil {
-		delIfaceAddr(i.Name(), cidr)
-	}
+	i.delIPv4()
 	err = addIfaceAddr(i.Name(), cidr)
 	if err != nil {
 		return err
@@ -53,6 +64,20 @@ func (i *Iface) SetIPv4(cidr string) error {
 	i.cidr4 = cidr
 	i.ipv4 = ip
 	i.subnet4 = subnet
+	return nil
+}
+
+func (i *Iface) delIPv4() error {
+	if i.ipv4 == nil {
+		return nil
+	}
+	err := delIfaceAddr(i.Name(), i.cidr4)
+	if err != nil {
+		return err
+	}
+	i.cidr4 = ""
+	i.ipv4 = nil
+	i.subnet4 = nil
 	return nil
 }
 
@@ -69,15 +94,6 @@ func (i *Iface) IPv4() net.IP {
 // Subnet4 ...
 func (i *Iface) Subnet4() *net.IPNet {
 	return i.subnet4
-}
-
-// MTU ..
-func (i *Iface) MTU() int {
-	ifi, err := net.InterfaceByName(i.Name())
-	if err != nil {
-		return 0
-	}
-	return ifi.MTU
 }
 
 // Close ...
@@ -145,7 +161,7 @@ func addIfaceAddrBSD(dev string, cidr string) error {
 	if err != nil {
 		return err
 	}
-	return runCmd("ifconfig", dev, ip.String(), ip.String(), "netmask", subnet.IP.String())
+	return runCmd("ifconfig", dev, "inet", ip.String(), ip.String(), "netmask", subnet.IP.String(), "alias")
 }
 
 func delIfaceAddrBSD(dev string, cidr string) error {

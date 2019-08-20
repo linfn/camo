@@ -24,3 +24,18 @@ func runCmdOutput(name string, arg ...string) ([]byte, error) {
 	}
 	return out, err
 }
+
+// RollBack ...
+type RollBack []func()
+
+// Add ...
+func (r *RollBack) Add(f func()) {
+	*r = append(*r, f)
+}
+
+// Do ...
+func (r RollBack) Do() {
+	for i := len(r) - 1; i >= 0; i-- {
+		r[i]()
+	}
+}

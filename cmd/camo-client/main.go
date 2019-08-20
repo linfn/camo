@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -9,7 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
-	"log"
+	stdlog "log"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -22,7 +23,10 @@ import (
 	"github.com/linfn/camo"
 )
 
-var camoDir = getCamoDir()
+var (
+	log     *camo.LevelLogger
+	camoDir = getCamoDir()
+)
 
 var (
 	help        = flag.Bool("h", false, "help")
@@ -48,28 +52,16 @@ func main() {
 		return
 	}
 
-	logLevel, ok := camo.LogLevelValues[strings.ToUpper(*logLevel)]
-	if !ok {
-		log.Fatal("invalid log level")
-	}
-
-	log := camo.NewLogger(log.New(os.Stderr, "", log.LstdFlags|log.Llongfile), logLevel)
+	initLog()
 
 	host := flag.Arg(0)
 	if host == "" {
 		log.Fatal("empty host")
 	}
 
-	if *debug {
-		go func() {
-			err := http.ListenAndServe(*debugListen, nil)
-			if err != http.ErrServerClosed {
-				log.Errorf("debug http server exited: %v", err)
-			}
-		}()
-	}
+	cid := ensureCID(host)
 
-	cid := ensureCID(host, log)
+	resolveAddr := ensureResolveAddr()
 
 	iface, err := camo.NewTun(*mtu)
 	if err != nil {
@@ -77,39 +69,43 @@ func main() {
 	}
 	defer iface.Close()
 
-	c := camo.Client{
-		CID:         cid,
-		Host:        host,
-		ResolveAddr: *resolve,
-		Auth: func(r *http.Request) {
-			camo.SetAuth(r, getPassword())
-		},
+	c := &camo.Client{
 		MTU:    *mtu,
+		CID:    cid,
+		Host:   host,
+		Addr:   resolveAddr,
+		Auth:   func(r *http.Request) { camo.SetAuth(r, getPassword()) },
 		Logger: log,
 		UseH2C: *useH2C,
-		SetupTunnel: func(localIP net.IP, remoteIP net.IP) (reset func(), err error) {
-			err = iface.SetIPv4(localIP.String() + "/32")
-			if err != nil {
-				return nil, err
-			}
-			log.Infof("%s(%s) up", iface.Name(), iface.CIDR4())
-			return camo.RedirectGateway(iface.Name(), localIP.String(), remoteIP.String())
-		},
 	}
 
 	expvar.Publish("camo", c.Metrics())
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	go func() {
-		s := make(chan os.Signal)
-		signal.Notify(s, os.Interrupt, syscall.SIGTERM)
-		<-s
-		c.Close()
+		c := make(chan os.Signal)
+		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+		log.Debugf("receive signal %s", <-c)
+		cancel()
 	}()
 
-	err = c.Run(iface)
-	if err != nil {
+	if *debug {
+		go debugHTTPServer()
+	}
+
+	err = camo.RunClient(ctx, c, iface, setupTunnelHandler(c, iface))
+	if err != nil && err != context.Canceled {
 		log.Fatal(err)
 	}
+}
+
+func initLog() {
+	logLevel, ok := camo.LogLevelValues[strings.ToUpper(*logLevel)]
+	if !ok {
+		stdlog.Fatal("invalid log level")
+	}
+	log = camo.NewLogger(stdlog.New(os.Stderr, "", stdlog.LstdFlags|stdlog.Llongfile), logLevel)
 }
 
 func getCamoDir() string {
@@ -135,7 +131,7 @@ func getPassword() string {
 	return os.Getenv("CAMO_PASSWORD")
 }
 
-func ensureCID(host string, log camo.Logger) string {
+func ensureCID(host string) string {
 	id, err := machineid.ProtectedID("camo@" + host)
 	if err == nil {
 		return id
@@ -166,4 +162,70 @@ func ensureCID(host string, log camo.Logger) string {
 	mac := hmac.New(sha256.New, b)
 	mac.Write([]byte("camo@" + host))
 	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func ensureResolveAddr() *net.TCPAddr {
+	addr := *resolve
+	if addr == "" {
+		return nil
+	}
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		addr = net.JoinHostPort(addr, "443")
+	}
+	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
+	if err != nil {
+		log.Fatal("resolve addr %s error: %v", addr, err)
+	}
+	return tcpAddr
+}
+
+func setupTunnelHandler(c *camo.Client, iface *camo.Iface) func(net.IP) (reset func(), err error) {
+	return func(ip net.IP) (reset func(), err error) {
+		var rollback camo.RollBack
+		defer func() {
+			if err != nil {
+				rollback.Do()
+			}
+		}()
+
+		if ip.To4() != nil {
+			err := iface.SetIPv4(ip.String() + "/32")
+			if err != nil {
+				return nil, err
+			}
+			rollback.Add(func() { iface.SetIPv4("") })
+			log.Infof("%s(%s) up", iface.Name(), iface.CIDR4())
+
+			srvAddr, err := c.ResolveAddr()
+			if err != nil {
+				return nil, err
+			}
+			if srvAddr.IP.To4() != nil {
+				oldGateway, oldDev, err := camo.GetRoute(srvAddr.IP.String())
+				if err != nil {
+					return nil, err
+				}
+				err = camo.AddRoute(srvAddr.IP.String(), oldGateway, oldDev)
+				if err != nil {
+					return nil, err
+				}
+				rollback.Add(func() { camo.DelRoute(srvAddr.IP.String(), oldGateway, oldDev) })
+			}
+
+			resetGateway, err := camo.RedirectGateway(iface.Name(), ip.String())
+			if err != nil {
+				return nil, err
+			}
+			rollback.Add(resetGateway)
+		}
+
+		return rollback.Do, nil
+	}
+}
+
+func debugHTTPServer() {
+	err := http.ListenAndServe(*debugListen, nil)
+	if err != http.ErrServerClosed {
+		log.Errorf("debug http server exited: %v", err)
+	}
 }

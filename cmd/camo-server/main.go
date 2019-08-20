@@ -1,9 +1,10 @@
 package main
 
 import (
+	"context"
 	"expvar"
 	"flag"
-	"log"
+	stdlog "log"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -19,6 +20,7 @@ import (
 )
 
 var (
+	log            *camo.LevelLogger
 	camoDir        = getCamoDir()
 	defaultCertDir = camoDir + "/certs"
 )
@@ -44,12 +46,7 @@ func main() {
 		return
 	}
 
-	logLevel, ok := camo.LogLevelValues[strings.ToUpper(*logLevel)]
-	if !ok {
-		log.Fatal("invalid log level")
-	}
-
-	log := camo.NewLogger(log.New(os.Stderr, "", log.LstdFlags|log.Llongfile), logLevel)
+	initLog()
 
 	if !*useH2C {
 		if *autocertHost == "" {
@@ -57,10 +54,7 @@ func main() {
 		}
 	}
 
-	password := getPassword()
-	if password == "" {
-		log.Fatal("missing password")
-	}
+	password := ensurePassword()
 
 	iface, err := camo.NewTun(*mtu)
 	if err != nil {
@@ -83,6 +77,8 @@ func main() {
 	ipv4Pool := camo.NewSubnetIPPool(iface.Subnet4(), 256)
 	ipv4Pool.Use(iface.IPv4(), "")
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	srv := camo.Server{
 		MTU:      *mtu,
 		IPv4Pool: ipv4Pool,
@@ -92,7 +88,7 @@ func main() {
 	expvar.Publish("camo", srv.Metrics())
 
 	mux := http.NewServeMux()
-	mux.Handle("/", withLog(log, srv.Handler("")))
+	mux.Handle("/", withLog(log, srv.Handler(ctx, "")))
 	mux.Handle("/debug/vars", expvar.Handler())
 	if *enablePProf {
 		handlePProf(mux)
@@ -114,15 +110,21 @@ func main() {
 		hsrv.Handler = handler
 	}
 
-	exit := func(e error) {
-		hsrv.Close()
-		srv.Close()
+	var exitOnce sync.Once
+	exit := func(err error) {
+		exitOnce.Do(func() {
+			hsrv.Close()
+			cancel()
+			if err != nil {
+				log.Errorf("server exits with error %v", err)
+			}
+		})
 	}
 
 	go func() {
 		c := make(chan os.Signal)
 		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-		<-c
+		log.Infof("receive signal %s", <-c)
 		exit(nil)
 	}()
 
@@ -133,25 +135,28 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		exit(srv.Serve(iface))
+		exit(srv.ServeIface(ctx, iface))
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		var err error
 		if hsrv.TLSConfig != nil {
-			err = hsrv.ListenAndServeTLS("", "")
+			exit(hsrv.ListenAndServeTLS("", ""))
 		} else {
-			err = hsrv.ListenAndServe()
+			exit(hsrv.ListenAndServe())
 		}
-		if err == http.ErrServerClosed {
-			err = nil
-		}
-		exit(err)
 	}()
 
 	wg.Wait()
+}
+
+func initLog() {
+	logLevel, ok := camo.LogLevelValues[strings.ToUpper(*logLevel)]
+	if !ok {
+		stdlog.Fatal("invalid log level")
+	}
+	log = camo.NewLogger(stdlog.New(os.Stderr, "", stdlog.LstdFlags|stdlog.Llongfile), logLevel)
 }
 
 func getCamoDir() string {
@@ -169,12 +174,16 @@ func ensureCamoDir() {
 	}
 }
 
-func getPassword() string {
+func ensurePassword() string {
 	p := *password
 	if p != "" {
 		return p
 	}
-	return os.Getenv("CAMO_PASSWORD")
+	p = os.Getenv("CAMO_PASSWORD")
+	if p == "" {
+		log.Fatal("missing password")
+	}
+	return p
 }
 
 func withLog(log camo.Logger, h http.Handler) http.Handler {

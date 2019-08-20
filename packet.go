@@ -1,6 +1,7 @@
 package camo
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -87,35 +88,35 @@ type bufferPool interface {
 }
 
 type (
-	readPacketHandler      func(stop <-chan struct{}, pkt []byte) bool
-	postWritePacketHandler func(stop <-chan struct{}, err error)
+	readPacketHandler      func(done <-chan struct{}, pkt []byte) bool
+	postWritePacketHandler func(done <-chan struct{}, err error)
 )
 
-func serveIO(stop <-chan struct{}, rw io.ReadWriteCloser, bp bufferPool, readHandler readPacketHandler, toWrite <-chan []byte, postWriteHandler postWritePacketHandler) (err error) {
-	done := make(chan struct{})
+func serveIO(ctx context.Context, rw io.ReadWriteCloser, bp bufferPool, readHandler readPacketHandler, toWrite <-chan []byte, postWriteHandler postWritePacketHandler) (err error) {
+	ctx, cancel := context.WithCancel(ctx)
+
+	var exitOnce sync.Once
 	exit := func(e error) {
-		select {
-		case <-done:
-		default:
-			close(done)
+		exitOnce.Do(func() {
 			err = e
 			rw.Close()
-		}
+			cancel()
+		})
 	}
-
-	go func() {
-		select {
-		case <-stop:
-			exit(nil)
-		case <-done:
-		}
-	}()
 
 	var wg sync.WaitGroup
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		<-ctx.Done()
+		exit(ctx.Err())
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		done := ctx.Done()
 		for {
 			select {
 			case pkt, ok := <-toWrite:
@@ -126,7 +127,7 @@ func serveIO(stop <-chan struct{}, rw io.ReadWriteCloser, bp bufferPool, readHan
 				_, e := rw.Write(pkt)
 				bp.freeBuffer(pkt)
 				if postWriteHandler != nil {
-					postWriteHandler(stop, e)
+					postWriteHandler(done, e)
 				}
 				if e != nil {
 					exit(e)
@@ -141,6 +142,7 @@ func serveIO(stop <-chan struct{}, rw io.ReadWriteCloser, bp bufferPool, readHan
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		done := ctx.Done()
 		for {
 			b := bp.getBuffer()
 			n, e := rw.Read(b)

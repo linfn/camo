@@ -25,32 +25,24 @@ const (
 
 // Client ...
 type Client struct {
-	CID         string
-	Host        string
-	ResolveAddr string
-	Auth        func(r *http.Request)
-	MTU         int
-	SetupTunnel func(localIP net.IP, remoteIP net.IP) (reset func(), err error)
-	Logger      Logger
-	UseH2C      bool
+	MTU    int
+	CID    string
+	Host   string
+	Addr   *net.TCPAddr
+	Auth   func(r *http.Request)
+	Logger Logger
+	UseH2C bool
 
 	mu              sync.Mutex
 	bufPool         sync.Pool
 	ifaceWriteChan  chan []byte
 	tunnelWriteChan chan []byte
-	doneChan        chan struct{}
+
+	cacheAddr *net.TCPAddr
+	hc        *http.Client
 
 	metrics     *Metrics
 	metricsOnce sync.Once
-}
-
-func (c *Client) getDoneChan() chan struct{} {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.doneChan == nil {
-		c.doneChan = make(chan struct{})
-	}
-	return c.doneChan
 }
 
 func (c *Client) getIfaceWriteChan() chan []byte {
@@ -111,28 +103,114 @@ func (c *Client) Metrics() *Metrics {
 	return c.metrics
 }
 
-func (c *Client) resolveAddr() (string, error) {
-	var addr string
-	if c.ResolveAddr != "" {
-		addr = c.ResolveAddr
-	} else {
-		addr = c.Host
-	}
-	if _, _, err := net.SplitHostPort(addr); err != nil {
-		addr = net.JoinHostPort(addr, "443")
-	}
-	a, err := net.ResolveTCPAddr("tcp", addr)
-	if err != nil {
-		return "", err
-	}
-	return a.String(), nil
+// ServeIface ...
+func (c *Client) ServeIface(ctx context.Context, iface io.ReadWriteCloser) error {
+	var (
+		log             = c.logger()
+		metrics         = c.Metrics()
+		rw              = WithIOMetric(iface, metrics.Iface)
+		tunnelWriteChan = c.getTunnelWriteChan()
+		bufpool         = c
+		h               ipv4.Header
+	)
+	return serveIO(ctx, rw, bufpool, func(done <-chan struct{}, pkt []byte) (retainBuf bool) {
+		if e := parseIPv4Header(&h, pkt); e != nil {
+			log.Warn("iface failed to parse ipv4 header:", e)
+			return
+		}
+		if h.Version != 4 {
+			log.Tracef("iface drop ip version %d", h.Version)
+			return
+		}
+		log.Tracef("iface recv: %s", &h)
+		select {
+		case tunnelWriteChan <- pkt:
+			retainBuf = true
+			metrics.Tunnels.Lags.Add(1)
+			return
+		case <-done:
+			return
+		}
+	}, c.getIfaceWriteChan(), nil)
 }
 
-func (c *Client) h2Transport(resolvedAddr string) http.RoundTripper {
+func (c *Client) serveTunnel(ctx context.Context, rw io.ReadWriteCloser) error {
+	metrics := c.Metrics().Tunnels
+
+	metrics.Streams.Add(1)
+	defer metrics.Streams.Add(-1)
+
+	rw = WithIOMetric(&packetIO{rw}, metrics.IOMetric)
+
+	var (
+		log            = c.logger()
+		ifaceWriteChan = c.getIfaceWriteChan()
+		postWrite      = func(<-chan struct{}, error) { metrics.Lags.Add(-1) }
+		bufpool        = c
+		h              ipv4.Header
+	)
+	return serveIO(ctx, rw, bufpool, func(done <-chan struct{}, pkt []byte) (retainBuf bool) {
+		if e := parseIPv4Header(&h, pkt); e != nil {
+			log.Warn("tunnel failed to parse ipv4 header:", e)
+			return
+		}
+		log.Tracef("tunnel recv: %s", &h)
+		select {
+		case ifaceWriteChan <- pkt:
+			retainBuf = true
+			return
+		case <-done:
+			return
+		}
+	}, c.getTunnelWriteChan(), postWrite)
+}
+
+// ResolveAddr ...
+func (c *Client) ResolveAddr() (*net.TCPAddr, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.resolveAddrLocked()
+}
+
+func (c *Client) resolveAddrLocked() (*net.TCPAddr, error) {
+	if c.cacheAddr != nil {
+		return c.cacheAddr, nil
+	}
+
+	if c.Addr != nil {
+		c.cacheAddr = c.Addr
+	} else {
+		addr := c.Host
+		if _, _, err := net.SplitHostPort(c.Host); err != nil {
+			addr = net.JoinHostPort(addr, "443")
+		}
+		tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
+		if err != nil {
+			return nil, err
+		}
+		c.cacheAddr = tcpAddr
+	}
+	c.logger().Info("server address is %s", c.cacheAddr)
+	return c.cacheAddr, nil
+}
+
+// FlushAddr ...
+func (c *Client) FlushAddr() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.cacheAddr = nil
+	if c.hc != nil {
+		c.hc.CloseIdleConnections()
+		c.hc = nil
+	}
+}
+
+func (c *Client) h2Transport(resolveAddr *net.TCPAddr) http.RoundTripper {
 	return &http2.Transport{
 		DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
-			if resolvedAddr != "" {
-				addr = resolvedAddr
+			if resolveAddr != nil {
+				addr = resolveAddr.String()
 			}
 			if c.UseH2C {
 				return net.Dial(network, addr)
@@ -162,125 +240,20 @@ func (c *Client) h2Transport(resolvedAddr string) http.RoundTripper {
 	}
 }
 
-func (c *Client) serveIface(stop <-chan struct{}, iface io.ReadWriteCloser) error {
-	var (
-		log             = c.logger()
-		metrics         = c.Metrics()
-		rw              = WithIOMetric(iface, metrics.Iface)
-		tunnelWriteChan = c.getTunnelWriteChan()
-		bufpool         = c
-		h               ipv4.Header
-	)
-	return serveIO(stop, rw, bufpool, func(stop <-chan struct{}, pkt []byte) (retainBuf bool) {
-		if e := parseIPv4Header(&h, pkt); e != nil {
-			log.Warn("iface failed to parse ipv4 header:", e)
-			return
-		}
-		if h.Version != 4 {
-			log.Tracef("iface drop ip version %d", h.Version)
-			return
-		}
-		log.Tracef("iface recv: %s", &h)
-		select {
-		case tunnelWriteChan <- pkt:
-			retainBuf = true
-			metrics.Tunnels.Lags.Add(1)
-			return
-		case <-stop:
-			return
-		}
-	}, c.getIfaceWriteChan(), nil)
-}
-
-// Run ...
-func (c *Client) Run(iface io.ReadWriteCloser) (err error) {
-	defer iface.Close()
-
-	if c.CID == "" {
-		return errors.New("empty cid")
+func (c *Client) httpClient() (*http.Client, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.hc != nil {
+		return c.hc, nil
 	}
-
-	log := c.logger()
-
-	resolvedAddr, err := c.resolveAddr()
+	srvAddr, err := c.resolveAddrLocked()
 	if err != nil {
-		return fmt.Errorf("failed to resolve host: %v", err)
+		return nil, fmt.Errorf("failed to resolve host: %v", err)
 	}
-	srvip, _, _ := net.SplitHostPort(resolvedAddr)
-	log.Infof("server address is %s", resolvedAddr)
-
-	hc := &http.Client{}
-	hc.Transport = c.h2Transport(resolvedAddr)
-
-	ip, ttl, err := c.reqIPv4(context.TODO(), hc)
-	if err != nil {
-		return err
+	c.hc = &http.Client{
+		Transport: c.h2Transport(srvAddr),
 	}
-
-	log.Infof("client get ip (%s) ttl (%d)", ip, ttl)
-
-	tunnel, err := c.openTunnel(hc, ip)
-	if err != nil {
-		return err
-	}
-
-	log.Infof("tunnel %s opened", ip)
-	defer log.Infof("tunnel %s closed", ip)
-
-	if c.SetupTunnel != nil {
-		reset, err := c.SetupTunnel(ip, net.ParseIP(srvip))
-		if err != nil {
-			done := make(chan struct{})
-			close(done)
-			tunnel(done)
-			return fmt.Errorf("setup route error: %v", err)
-		}
-		defer reset()
-	}
-
-	done := make(chan struct{})
-	exit := func(e error) {
-		select {
-		case <-done:
-		default:
-			close(done)
-			err = e
-		}
-	}
-
-	go func() {
-		clientDone := c.getDoneChan()
-		select {
-		case <-clientDone:
-			exit(nil)
-		case <-done:
-		}
-	}()
-
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err := tunnel(done)
-		if err != nil {
-			err = fmt.Errorf("tunnel exited: %v", err)
-		}
-		exit(err)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err := c.serveIface(done, iface)
-		if err != nil {
-			err = fmt.Errorf("serve iface exited: %v", err)
-		}
-		exit(err)
-	}()
-
-	wg.Wait()
-	return
+	return c.hc, nil
 }
 
 func (c *Client) url(path string) *url.URL {
@@ -297,7 +270,13 @@ func (c *Client) setAuth(r *http.Request) {
 	}
 }
 
-func (c *Client) reqIPv4(ctx context.Context, hc *http.Client) (ip net.IP, ttl time.Duration, err error) {
+// RequestIPv4 ...
+func (c *Client) RequestIPv4(ctx context.Context) (ip net.IP, ttl time.Duration, err error) {
+	hc, err := c.httpClient()
+	if err != nil {
+		return
+	}
+
 	req := &http.Request{
 		Method: "POST",
 		URL:    c.url("/ip/v4"),
@@ -352,7 +331,13 @@ func (s *httpClientStream) Close() error {
 	return err2
 }
 
-func (c *Client) openTunnel(hc *http.Client, ip net.IP) (func(stop <-chan struct{}) error, error) {
+// OpenTunnel ...
+func (c *Client) OpenTunnel(ip net.IP) (func(context.Context) error, error) {
+	hc, err := c.httpClient()
+	if err != nil {
+		return nil, err
+	}
+
 	r, w := io.Pipe()
 	req := &http.Request{
 		Method: "POST",
@@ -374,42 +359,81 @@ func (c *Client) openTunnel(hc *http.Client, ip net.IP) (func(stop <-chan struct
 		return nil, fmt.Errorf("failed to open tunnel, status: %s", res.Status)
 	}
 
-	return func(stop <-chan struct{}) error {
-		c.Metrics().Tunnels.Streams.Add(1)
-		defer c.Metrics().Tunnels.Streams.Add(-1)
-
-		var (
-			log            = c.logger()
-			metrics        = c.Metrics()
-			rw             = WithIOMetric(&packetIO{&httpClientStream{res.Body, w}}, metrics.Tunnels.IOMetric)
-			ifaceWriteChan = c.getIfaceWriteChan()
-			postWrite      = func(<-chan struct{}, error) { metrics.Tunnels.Lags.Add(-1) }
-			bufpool        = c
-			h              ipv4.Header
-		)
-		return serveIO(stop, rw, bufpool, func(stop <-chan struct{}, pkt []byte) (retainBuf bool) {
-			if e := parseIPv4Header(&h, pkt); e != nil {
-				log.Warn("tunnel failed to parse ipv4 header:", e)
-				return
-			}
-			log.Tracef("tunnel recv: %s", &h)
-			select {
-			case ifaceWriteChan <- pkt:
-				retainBuf = true
-				return
-			case <-stop:
-				return
-			}
-		}, c.getTunnelWriteChan(), postWrite)
+	return func(ctx context.Context) error {
+		return c.serveTunnel(ctx, &httpClientStream{res.Body, w})
 	}, nil
 }
 
-// Close ...
-func (c *Client) Close() {
-	done := c.getDoneChan()
-	select {
-	case <-done:
-	default:
-		close(done)
+// RunClient ...
+func RunClient(ctx context.Context, c *Client, iface io.ReadWriteCloser, setupTunnel func(localIP net.IP) (reset func(), err error)) (err error) {
+	defer iface.Close()
+
+	log := c.logger()
+
+	// TODO timeout
+	ip, ttl, err := c.RequestIPv4(ctx)
+	if err != nil {
+		return err
 	}
+
+	log.Infof("client get ip (%s) ttl (%d)", ip, ttl)
+
+	tunnel, err := c.OpenTunnel(ip)
+	if err != nil {
+		return err
+	}
+
+	log.Infof("tunnel %s opened", ip)
+	defer log.Infof("tunnel %s closed", ip)
+
+	if setupTunnel != nil {
+		reset, err := setupTunnel(ip)
+		if err != nil {
+			ctx, cancel := context.WithCancel(ctx)
+			cancel()
+			tunnel(ctx)
+			return fmt.Errorf("setup route error: %v", err)
+		}
+		defer reset()
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+
+	var exitOnce sync.Once
+	exit := func(e error) {
+		exitOnce.Do(func() {
+			err = e
+			cancel()
+		})
+	}
+
+	go func() {
+		<-ctx.Done()
+		exit(ctx.Err())
+	}()
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := tunnel(ctx)
+		if err != nil {
+			err = fmt.Errorf("tunnel exited: %v", err)
+		}
+		exit(err)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := c.ServeIface(ctx, iface)
+		if err != nil {
+			err = fmt.Errorf("serve iface exited: %v", err)
+		}
+		exit(err)
+	}()
+
+	wg.Wait()
+	return
 }

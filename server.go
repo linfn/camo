@@ -1,6 +1,7 @@
 package camo
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -46,7 +47,6 @@ type Server struct {
 
 	bufPool        sync.Pool
 	ifaceWriteChan chan []byte
-	doneChan       chan struct{}
 
 	metrics     *Metrics
 	metricsOnce sync.Once
@@ -65,21 +65,6 @@ func (s *Server) getIfaceWriteChan() chan []byte {
 		s.ifaceWriteChan = make(chan []byte, defaultServerIfaceWriteChanLen)
 	}
 	return s.ifaceWriteChan
-}
-
-func (s *Server) getDoneChan() chan struct{} {
-	s.mu.RLock()
-	if s.doneChan != nil {
-		s.mu.RUnlock()
-		return s.doneChan
-	}
-	s.mu.RUnlock()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.doneChan == nil {
-		s.doneChan = make(chan struct{})
-	}
-	return s.doneChan
 }
 
 func (s *Server) mtu() int {
@@ -122,8 +107,8 @@ func (s *Server) Metrics() *Metrics {
 	return s.metrics
 }
 
-// Serve ...
-func (s *Server) Serve(iface io.ReadWriteCloser) error {
+// ServeIface ...
+func (s *Server) ServeIface(ctx context.Context, iface io.ReadWriteCloser) error {
 	var (
 		log     = s.logger()
 		metrics = s.Metrics()
@@ -131,7 +116,7 @@ func (s *Server) Serve(iface io.ReadWriteCloser) error {
 		bufpool = s
 		h       ipv4.Header
 	)
-	return serveIO(s.getDoneChan(), rw, bufpool, func(_ <-chan struct{}, pkt []byte) (retainBuf bool) {
+	return serveIO(ctx, rw, bufpool, func(_ <-chan struct{}, pkt []byte) (retainBuf bool) {
 		if e := parseIPv4Header(&h, pkt); e != nil {
 			log.Warn("iface failed to parse ipv4 header:", e)
 			return
@@ -157,16 +142,6 @@ func (s *Server) Serve(iface io.ReadWriteCloser) error {
 			return
 		}
 	}, s.getIfaceWriteChan(), nil)
-}
-
-// Close ...
-func (s *Server) Close() {
-	done := s.getDoneChan()
-	select {
-	case <-done:
-	default:
-		close(done)
-	}
 }
 
 func (s *Server) sessionTTL() time.Duration {
@@ -255,15 +230,14 @@ func (s *Server) getOrCreateSession(ip net.IP, cid string) (*session, error) {
 
 func (s *Server) removeSession(ip net.IP) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	ss, ok := s.ipSession[ip.String()]
-	if ok {
+	if ss, ok := s.ipSession[ip.String()]; ok {
 		delete(s.ipSession, ip.String())
 		if ip.To4() != nil {
 			delete(s.cidIPv4Session, ss.cid)
 		} else {
 			delete(s.cidIPv6Session, ss.cid)
 		}
+		s.mu.Unlock()
 		metrics := s.Metrics()
 	LOOP:
 		for {
@@ -278,6 +252,8 @@ func (s *Server) removeSession(ip net.IP) {
 				break LOOP
 			}
 		}
+	} else {
+		s.mu.Unlock()
 	}
 }
 
@@ -315,13 +291,13 @@ func (s *Server) RequestIPv4(cid string) (ip net.IP, ttl time.Duration, err erro
 }
 
 // OpenTunnel ...
-func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(stop <-chan struct{}) error, error) {
+func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(ctx context.Context) error, error) {
 	ss, err := s.getOrCreateSession(ip, cid)
 	if err != nil {
 		return nil, err
 	}
 
-	return func(stop <-chan struct{}) error {
+	return func(ctx context.Context) error {
 		if !ss.retain() {
 			return newError(http.StatusUnprocessableEntity, "session expired")
 		}
@@ -340,7 +316,7 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 			bufpool    = s
 			h          ipv4.Header
 		)
-		return serveIO(stop, rw, bufpool, func(stop <-chan struct{}, pkt []byte) (retainBuf bool) {
+		return serveIO(ctx, rw, bufpool, func(done <-chan struct{}, pkt []byte) (retainBuf bool) {
 			err = parseIPv4Header(&h, pkt)
 			if err != nil {
 				log.Warn("tunnel failed to parse ipv4 header:", err)
@@ -355,7 +331,7 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 			case ifaceWrite <- pkt:
 				retainBuf = true
 				return
-			case <-stop:
+			case <-done:
 				return
 			}
 		}, ss.writeChan, postWrite)
@@ -363,7 +339,7 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 }
 
 // Handler ...
-func (s *Server) Handler(prefix string) http.Handler {
+func (s *Server) Handler(ctx context.Context, prefix string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc(prefix+"/ip/v4", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
@@ -444,7 +420,7 @@ func (s *Server) Handler(prefix string) http.Handler {
 		log := s.logger()
 		log.Infof("tunnel %s opened, cid: %s, remote: %s", ip, cid, r.RemoteAddr)
 
-		err = tunnel(s.getDoneChan())
+		err = tunnel(ctx)
 		if err != nil {
 			log.Infof("tunnel %s closed. %v", ip, err)
 		} else {

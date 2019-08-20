@@ -171,21 +171,11 @@ func SetupNAT(src string) (cancel func(), err error) {
 }
 
 // RedirectGateway 参考 https://www.tinc-vpn.org/examples/redirect-gateway/
-func RedirectGateway(dev string, devIP string, srvIP string) (reset func(), err error) {
-	oldGateway, oldDev, err := GetRoute(srvIP)
-	if err != nil {
-		return nil, err
-	}
-
-	var rollbacks []func()
-	rollback := func() {
-		for i := len(rollbacks) - 1; i >= 0; i-- {
-			rollbacks[i]()
-		}
-	}
+func RedirectGateway(dev string, gateway string) (reset func(), err error) {
+	var rollback RollBack
 	defer func() {
 		if err != nil {
-			rollback()
+			rollback.Do()
 		}
 	}()
 
@@ -197,16 +187,15 @@ func RedirectGateway(dev string, devIP string, srvIP string) (reset func(), err 
 		if err != nil {
 			return
 		}
-		rollbacks = append(rollbacks, func() { DelRoute(ip, gateway, dev) })
+		rollback.Add(func() { DelRoute(ip, gateway, dev) })
 		return
 	}
 
-	add(srvIP, oldGateway, oldDev)
-	add("0.0.0.0/1", devIP, dev)
-	add("128.0.0.0/1", devIP, dev)
+	add("0.0.0.0/1", gateway, dev)
+	add("128.0.0.0/1", gateway, dev)
 
 	if err != nil {
 		return nil, err
 	}
-	return rollback, nil
+	return rollback.Do, nil
 }
