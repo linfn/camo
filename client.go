@@ -332,7 +332,7 @@ func (s *httpClientStream) Close() error {
 }
 
 // OpenTunnel ...
-func (c *Client) OpenTunnel(ip net.IP) (func(context.Context) error, error) {
+func (c *Client) OpenTunnel(ctx context.Context, ip net.IP) (func(context.Context) error, error) {
 	hc, err := c.httpClient()
 	if err != nil {
 		return nil, err
@@ -348,6 +348,7 @@ func (c *Client) OpenTunnel(ip net.IP) (func(context.Context) error, error) {
 		Body: ioutil.NopCloser(r),
 	}
 	c.setAuth(req)
+	// TODO 这里不能直接使用 ctx 作为 req 的 Context, 我们需要保持 req.Body 和 res.Body 组成的双向流
 	res, err := hc.Do(req.WithContext(context.TODO()))
 	if err != nil {
 		w.Close()
@@ -378,7 +379,7 @@ func RunClient(ctx context.Context, c *Client, iface io.ReadWriteCloser, setupTu
 
 	log.Infof("client get ip (%s) ttl (%d)", ip, ttl)
 
-	tunnel, err := c.OpenTunnel(ip)
+	tunnel, err := c.OpenTunnel(ctx, ip)
 	if err != nil {
 		return err
 	}
