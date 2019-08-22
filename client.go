@@ -270,13 +270,57 @@ func (c *Client) setAuth(r *http.Request) {
 	}
 }
 
-// RequestIPv4 ...
-func (c *Client) RequestIPv4(ctx context.Context) (ip net.IP, ttl time.Duration, err error) {
+// ClientAPIError ...
+type ClientAPIError struct {
+	Err  error
+	temp bool
+}
+
+func (e *ClientAPIError) Error() string {
+	return e.Err.Error()
+}
+
+// Temporary ...
+func (e *ClientAPIError) Temporary() bool {
+	return e.temp
+}
+
+func (c *Client) doReq(req *http.Request) (*http.Response, error) {
+	c.setAuth(req)
+
 	hc, err := c.httpClient()
 	if err != nil {
-		return
+		return nil, &ClientAPIError{Err: err, temp: true}
+	}
+	res, err := hc.Do(req)
+	if err != nil {
+		if e, ok := err.(*url.Error); ok && e.Err == context.Canceled {
+			err = &ClientAPIError{Err: context.Canceled, temp: false}
+		} else {
+			err = &ClientAPIError{Err: err, temp: true}
+		}
+		return nil, err
 	}
 
+	if res.StatusCode != http.StatusOK {
+		var msg string
+		b, err := ioutil.ReadAll(res.Body)
+		msg = string(b)
+		if err != nil {
+			msg += "..+" + err.Error()
+		}
+		res.Body.Close()
+		return res, &ClientAPIError{
+			Err:  &statusError{res.StatusCode, string(msg)},
+			temp: isStatusRetryable(res.StatusCode),
+		}
+	}
+
+	return res, nil
+}
+
+// RequestIPv4 ...
+func (c *Client) RequestIPv4(ctx context.Context) (ip net.IP, ttl time.Duration, err error) {
 	req := &http.Request{
 		Method: "POST",
 		URL:    c.url("/ip/v4"),
@@ -284,20 +328,11 @@ func (c *Client) RequestIPv4(ctx context.Context) (ip net.IP, ttl time.Duration,
 			headerClientID: []string{c.CID},
 		},
 	}
-	c.setAuth(req)
-	res, err := hc.Do(req.WithContext(ctx))
+	res, err := c.doReq(req.WithContext(ctx))
 	if err != nil {
-		if err == context.Canceled || err == context.DeadlineExceeded {
-			return
-		}
-		err = fmt.Errorf("failed to get ip, error: %v", err)
 		return
 	}
 	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		err = fmt.Errorf("failed to get ip, status: %s", res.Status)
-		return
-	}
 
 	var result struct {
 		IP  string `json:"ip"`
@@ -305,12 +340,16 @@ func (c *Client) RequestIPv4(ctx context.Context) (ip net.IP, ttl time.Duration,
 	}
 	err = json.NewDecoder(res.Body).Decode(&result)
 	if err != nil {
-		err = fmt.Errorf("failed to decode ip result, error: %s", err)
+		var temp bool
+		if _, ok := err.(*json.SyntaxError); !ok {
+			temp = true
+		}
+		err = &ClientAPIError{Err: fmt.Errorf("failed to decode ip result, error: %s", err), temp: temp}
 		return
 	}
 	ip = net.ParseIP(result.IP)
 	if ip == nil {
-		err = fmt.Errorf("failed to decode ip (%s)", result.IP)
+		err = &ClientAPIError{Err: fmt.Errorf("failed to decode ip (%s)", result.IP), temp: false}
 		return
 	}
 
@@ -333,11 +372,6 @@ func (s *httpClientStream) Close() error {
 
 // OpenTunnel ...
 func (c *Client) OpenTunnel(ctx context.Context, ip net.IP) (func(context.Context) error, error) {
-	hc, err := c.httpClient()
-	if err != nil {
-		return nil, err
-	}
-
 	r, w := io.Pipe()
 	req := &http.Request{
 		Method: "POST",
@@ -347,55 +381,54 @@ func (c *Client) OpenTunnel(ctx context.Context, ip net.IP) (func(context.Contex
 		},
 		Body: ioutil.NopCloser(r),
 	}
-	c.setAuth(req)
 	// TODO 这里不能直接使用 ctx 作为 req 的 Context, 我们需要保持 req.Body 和 res.Body 组成的双向流
-	res, err := hc.Do(req.WithContext(context.TODO()))
+	res, err := c.doReq(req.WithContext(context.TODO()))
 	if err != nil {
 		w.Close()
-		return nil, fmt.Errorf("failed to open tunnel, error: %v", err)
+		return nil, err
 	}
-	if res.StatusCode != http.StatusOK {
-		w.Close()
-		res.Body.Close()
-		return nil, fmt.Errorf("failed to open tunnel, status: %s", res.Status)
-	}
-
 	return func(ctx context.Context) error {
 		return c.serveTunnel(ctx, &httpClientStream{res.Body, w})
 	}, nil
 }
 
 // RunClient ...
-func RunClient(ctx context.Context, c *Client, iface io.ReadWriteCloser, setupTunnel func(localIP net.IP) (reset func(), err error)) (err error) {
+func RunClient(ctx context.Context, c *Client, iface io.ReadWriteCloser, setupTun func(localIP net.IP) (reset func(), err error)) (err error) {
 	defer iface.Close()
 
 	log := c.logger()
 
-	// TODO timeout
-	ip, ttl, err := c.RequestIPv4(ctx)
-	if err != nil {
-		return err
-	}
+	openTunnel := func(ctx context.Context) (func(context.Context) error, error) {
+		var err error
 
-	log.Infof("client get ip (%s) ttl (%d)", ip, ttl)
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 
-	tunnel, err := c.OpenTunnel(ctx, ip)
-	if err != nil {
-		return err
-	}
-
-	log.Infof("tunnel %s opened", ip)
-	defer log.Infof("tunnel %s closed", ip)
-
-	if setupTunnel != nil {
-		reset, err := setupTunnel(ip)
+		ip, ttl, err := c.RequestIPv4(ctx)
 		if err != nil {
-			ctx, cancel := context.WithCancel(ctx)
 			cancel()
-			tunnel(ctx)
-			return fmt.Errorf("setup route error: %v", err)
+			return nil, err
 		}
-		defer reset()
+
+		log.Infof("client get ip (%s) ttl (%d)", ip, ttl)
+
+		tunnel, err := c.OpenTunnel(ctx, ip)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+
+		cancel()
+
+		reset, err := setupTun(ip)
+		if err != nil {
+			tunnel(ctx) // use a canceled ctx to terminate the tunnel
+			return nil, fmt.Errorf("setup tunnel error: %v", err)
+		}
+
+		return func(ctx context.Context) error {
+			defer reset()
+			return tunnel(ctx)
+		}, nil
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -408,33 +441,51 @@ func RunClient(ctx context.Context, c *Client, iface io.ReadWriteCloser, setupTu
 		})
 	}
 
-	go func() {
-		<-ctx.Done()
-		exit(ctx.Err())
-	}()
-
 	var wg sync.WaitGroup
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		err := tunnel(ctx)
-		if err != nil {
-			err = fmt.Errorf("tunnel exited: %v", err)
+		e := c.ServeIface(ctx, iface)
+		if e == context.Canceled {
+			exit(context.Canceled)
+		} else {
+			exit(fmt.Errorf("serve iface exited: %v", e))
 		}
-		exit(err)
 	}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err := c.ServeIface(ctx, iface)
-		if err != nil {
-			err = fmt.Errorf("serve iface exited: %v", err)
+	for {
+		tunnel, e := openTunnel(ctx)
+		if e != nil {
+			if ae, ok := e.(*ClientAPIError); ok {
+				if ae.Temporary() {
+					log.Errorf("failed to open tunnel: %v", e)
+					goto RETRY
+				}
+				if ae.Err == context.Canceled {
+					e = context.Canceled
+				}
+			}
+			exit(e)
+			break
 		}
-		exit(err)
-	}()
+
+		log.Info("tunnel opened")
+
+		e = tunnel(ctx)
+		if e == context.Canceled {
+			log.Info("tunnel closed")
+			exit(context.Canceled)
+			break
+		}
+		log.Errorf("tunnel closed: %v", e)
+
+	RETRY:
+		// TODO exponential backoff
+		time.Sleep(1 * time.Second)
+		c.FlushAddr()
+	}
 
 	wg.Wait()
-	return
+	return err
 }

@@ -3,6 +3,7 @@ package camo
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -23,13 +24,13 @@ const (
 
 var (
 	// ErrNoIPConfig ...
-	ErrNoIPConfig = newError(http.StatusUnprocessableEntity, "no ip config")
-	// ErrIPExhausted ...
-	ErrIPExhausted = newError(http.StatusServiceUnavailable, "ip exhausted")
+	ErrNoIPConfig = &statusError{http.StatusUnprocessableEntity, "no ip config"}
+	// ErrUnableAssignIP ...
+	ErrUnableAssignIP = &statusError{http.StatusServiceUnavailable, "unable to assign ip address"}
 	// ErrIPConflict ...
-	ErrIPConflict = newError(http.StatusConflict, "ip conflict")
+	ErrIPConflict = &statusError{http.StatusConflict, "ip conflict"}
 	// ErrInvalidIP ...
-	ErrInvalidIP = newError(http.StatusBadRequest, "invalid ip address")
+	ErrInvalidIP = &statusError{http.StatusBadRequest, "invalid ip address"}
 )
 
 // Server ...
@@ -282,7 +283,7 @@ func (s *Server) RequestIPv4(cid string) (ip net.IP, ttl time.Duration, err erro
 
 	ip, ok = s.IPv4Pool.Get(cid)
 	if !ok {
-		err = ErrIPExhausted
+		err = ErrUnableAssignIP
 		return
 	}
 
@@ -299,7 +300,8 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 
 	return func(ctx context.Context) error {
 		if !ss.retain() {
-			return newError(http.StatusUnprocessableEntity, "session expired")
+			rw.Close()
+			return errors.New("session expired")
 		}
 		defer ss.release()
 
@@ -316,10 +318,9 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 			bufpool    = s
 			h          ipv4.Header
 		)
-		return serveIO(ctx, rw, bufpool, func(done <-chan struct{}, pkt []byte) (retainBuf bool) {
-			err = parseIPv4Header(&h, pkt)
-			if err != nil {
-				log.Warn("tunnel failed to parse ipv4 header:", err)
+		err := serveIO(ctx, rw, bufpool, func(done <-chan struct{}, pkt []byte) (retainBuf bool) {
+			if e := parseIPv4Header(&h, pkt); e != nil {
+				log.Warn("tunnel failed to parse ipv4 header:", e)
 				return
 			}
 			log.Tracef("tunnel recv: %s", &h)
@@ -335,6 +336,10 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 				return
 			}
 		}, ss.writeChan, postWrite)
+		if err == io.EOF {
+			return nil
+		}
+		return err
 	}, nil
 }
 

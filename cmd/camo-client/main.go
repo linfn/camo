@@ -35,7 +35,7 @@ var (
 	mtu         = flag.Int("mtu", camo.DefaultMTU, "mtu")
 	logLevel    = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
 	useH2C      = flag.Bool("h2c", false, "use h2c (for debug)")
-	debug       = flag.Bool("debug", false, "enable metric")
+	debug       = flag.Bool("debug", false, "enable metric and pprof")
 	debugListen = flag.String("debug-listen", "localhost:6060", "debug http server listen address")
 )
 
@@ -94,7 +94,7 @@ func main() {
 		go debugHTTPServer()
 	}
 
-	err = camo.RunClient(ctx, c, iface, setupTunnelHandler(c, iface))
+	err = camo.RunClient(ctx, c, iface, setupTunHandler(c, iface))
 	if err != nil && err != context.Canceled {
 		log.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func ensureResolveAddr() *net.TCPAddr {
 	return tcpAddr
 }
 
-func setupTunnelHandler(c *camo.Client, iface *camo.Iface) func(net.IP) (reset func(), err error) {
+func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP) (reset func(), err error) {
 	return func(ip net.IP) (reset func(), err error) {
 		var rollback camo.RollBack
 		defer func() {
@@ -201,15 +201,16 @@ func setupTunnelHandler(c *camo.Client, iface *camo.Iface) func(net.IP) (reset f
 				return nil, err
 			}
 			if srvAddr.IP.To4() != nil {
-				oldGateway, oldDev, err := camo.GetRoute(srvAddr.IP.String())
+				svrIP := srvAddr.IP.String()
+				oldGateway, oldDev, err := camo.GetRoute(svrIP)
 				if err != nil {
 					return nil, err
 				}
-				err = camo.AddRoute(srvAddr.IP.String(), oldGateway, oldDev)
+				err = camo.AddRoute(svrIP, oldGateway, oldDev)
 				if err != nil {
 					return nil, err
 				}
-				rollback.Add(func() { camo.DelRoute(srvAddr.IP.String(), oldGateway, oldDev) })
+				rollback.Add(func() { camo.DelRoute(svrIP, oldGateway, oldDev) })
 			}
 
 			resetGateway, err := camo.RedirectGateway(iface.Name(), ip.String())

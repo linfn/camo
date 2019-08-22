@@ -15,17 +15,14 @@ func (e *statusError) StatusCode() int {
 }
 
 func (e *statusError) Error() string {
-	if e.msg != "" {
-		return e.msg
+	msg := e.msg
+	if msg == "" {
+		msg = http.StatusText(e.status)
 	}
-	return http.StatusText(e.status)
-}
-
-func newError(code int, msg ...interface{}) error {
-	return &statusError{
-		status: code,
-		msg:    fmt.Sprint(msg...),
+	if msg == "" {
+		return fmt.Sprintf("code %d", e.status)
 	}
+	return fmt.Sprintf("code %d: %s", e.status, msg)
 }
 
 func getStatusCode(err error) int {
@@ -36,4 +33,15 @@ func getStatusCode(err error) int {
 		return err.StatusCode()
 	}
 	return http.StatusInternalServerError
+}
+
+func isStatusRetryable(code int) bool {
+	switch code {
+	case http.StatusRequestTimeout, http.StatusTooManyRequests:
+		return true
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
 }

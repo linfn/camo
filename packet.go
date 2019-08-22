@@ -121,7 +121,6 @@ func serveIO(ctx context.Context, rw io.ReadWriteCloser, bp bufferPool, readHand
 			select {
 			case pkt, ok := <-toWrite:
 				if !ok {
-					exit(nil)
 					return
 				}
 				_, e := rw.Write(pkt)
@@ -139,30 +138,23 @@ func serveIO(ctx context.Context, rw io.ReadWriteCloser, bp bufferPool, readHand
 		}
 	}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		done := ctx.Done()
-		for {
-			b := bp.getBuffer()
-			n, e := rw.Read(b)
-			if n > 0 {
-				ok := readHandler(done, b[:n])
-				if !ok {
-					bp.freeBuffer(b)
-				}
-			} else {
+	done := ctx.Done()
+	for {
+		b := bp.getBuffer()
+		n, e := rw.Read(b)
+		if n > 0 {
+			ok := readHandler(done, b[:n])
+			if !ok {
 				bp.freeBuffer(b)
 			}
-			if e != nil {
-				if e == io.EOF {
-					e = nil
-				}
-				exit(e)
-				return
-			}
+		} else {
+			bp.freeBuffer(b)
 		}
-	}()
+		if e != nil {
+			exit(e)
+			break
+		}
+	}
 
 	wg.Wait()
 	return
