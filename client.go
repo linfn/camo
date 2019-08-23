@@ -171,7 +171,7 @@ type httpClient struct {
 	remoteAddr net.Addr
 }
 
-func (c *Client) newTransport() (ts http.RoundTripper) {
+func (c *Client) newTransport(hc *httpClient) (ts http.RoundTripper) {
 	var (
 		mu           sync.Mutex
 		resolvedAddr string
@@ -211,11 +211,7 @@ func (c *Client) newTransport() (ts http.RoundTripper) {
 				mu.Unlock()
 				locked = false
 
-				c.mu.Lock()
-				if c.hc != nil && c.hc.Transport == ts {
-					c.hc.remoteAddr = conn.RemoteAddr()
-				}
-				c.mu.Unlock()
+				hc.remoteAddr = conn.RemoteAddr()
 			}
 
 			if !c.UseH2C {
@@ -251,11 +247,8 @@ func (c *Client) httpClient() *httpClient {
 	if c.hc != nil {
 		return c.hc
 	}
-	c.hc = &httpClient{
-		Client: http.Client{
-			Transport: c.newTransport(),
-		},
-	}
+	c.hc = new(httpClient)
+	c.hc.Transport = c.newTransport(c.hc)
 	return c.hc
 }
 
