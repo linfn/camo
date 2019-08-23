@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"expvar"
 	"flag"
 	"fmt"
@@ -70,13 +71,13 @@ func main() {
 	defer iface.Close()
 
 	c := &camo.Client{
-		MTU:    *mtu,
-		CID:    cid,
-		Host:   host,
-		Addr:   resolveAddr,
-		Auth:   func(r *http.Request) { camo.SetAuth(r, getPassword()) },
-		Logger: log,
-		UseH2C: *useH2C,
+		MTU:         *mtu,
+		CID:         cid,
+		Host:        host,
+		ResolveAddr: resolveAddr,
+		Auth:        func(r *http.Request) { camo.SetAuth(r, getPassword()) },
+		Logger:      log,
+		UseH2C:      *useH2C,
 	}
 
 	expvar.Publish("camo", c.Metrics())
@@ -95,7 +96,7 @@ func main() {
 	}
 
 	err = camo.RunClient(ctx, c, iface, setupTunHandler(c, iface))
-	if err != nil && err != context.Canceled {
+	if ctx.Err() == nil {
 		log.Fatal(err)
 	}
 }
@@ -164,23 +165,19 @@ func ensureCID(host string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func ensureResolveAddr() *net.TCPAddr {
-	addr := *resolve
-	if addr == "" {
-		return nil
+func ensureResolveAddr() string {
+	if *resolve == "" {
+		return ""
 	}
-	if _, _, err := net.SplitHostPort(addr); err != nil {
-		addr = net.JoinHostPort(addr, "443")
-	}
-	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
+	addr, err := camo.GetHostPortAddr(*resolve, "443")
 	if err != nil {
-		log.Fatal("resolve addr %s error: %v", addr, err)
+		log.Fatal("resolve addr %s error: %v", *resolve, err)
 	}
-	return tcpAddr
+	return addr
 }
 
-func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP) (reset func(), err error) {
-	return func(ip net.IP) (reset func(), err error) {
+func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP, net.Addr) (reset func(), err error) {
+	return func(tunIP net.IP, remoteAddr net.Addr) (reset func(), err error) {
 		var rollback camo.RollBack
 		defer func() {
 			if err != nil {
@@ -188,20 +185,24 @@ func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP) (reset func
 			}
 		}()
 
-		if ip.To4() != nil {
-			err := iface.SetIPv4(ip.String() + "/32")
+		if tunIP.To4() != nil {
+			err := iface.SetIPv4(tunIP.String() + "/32")
 			if err != nil {
 				return nil, err
 			}
 			rollback.Add(func() { iface.SetIPv4("") })
 			log.Infof("%s(%s) up", iface.Name(), iface.CIDR4())
 
-			srvAddr, err := c.ResolveAddr()
+			host, _, err := net.SplitHostPort(remoteAddr.String())
 			if err != nil {
 				return nil, err
 			}
-			if srvAddr.IP.To4() != nil {
-				svrIP := srvAddr.IP.String()
+			srvIP := net.ParseIP(host)
+			if srvIP == nil {
+				return nil, errors.New("invalid ip from remote address")
+			}
+			if srvIP.To4() != nil {
+				svrIP := srvIP.String()
 				oldGateway, oldDev, err := camo.GetRoute(svrIP)
 				if err != nil {
 					return nil, err
@@ -213,7 +214,7 @@ func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP) (reset func
 				rollback.Add(func() { camo.DelRoute(svrIP, oldGateway, oldDev) })
 			}
 
-			resetGateway, err := camo.RedirectGateway(iface.Name(), ip.String())
+			resetGateway, err := camo.RedirectGateway(iface.Name(), tunIP.String())
 			if err != nil {
 				return nil, err
 			}

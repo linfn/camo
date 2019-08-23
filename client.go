@@ -25,21 +25,22 @@ const (
 
 // Client ...
 type Client struct {
-	MTU    int
-	CID    string
-	Host   string
-	Addr   *net.TCPAddr
-	Auth   func(r *http.Request)
-	Logger Logger
-	UseH2C bool
+	MTU         int
+	CID         string
+	Host        string
+	ResolveAddr string
+	TLSConfig   *tls.Config
+	URLPrefix   string
+	Auth        func(r *http.Request)
+	Logger      Logger
+	UseH2C      bool
 
 	mu              sync.Mutex
 	bufPool         sync.Pool
 	ifaceWriteChan  chan []byte
 	tunnelWriteChan chan []byte
 
-	cacheAddr *net.TCPAddr
-	hc        *http.Client
+	hc *httpClient
 
 	metrics     *Metrics
 	metricsOnce sync.Once
@@ -165,102 +166,115 @@ func (c *Client) serveTunnel(ctx context.Context, rw io.ReadWriteCloser) error {
 	}, c.getTunnelWriteChan(), postWrite)
 }
 
-// ResolveAddr ...
-func (c *Client) ResolveAddr() (*net.TCPAddr, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.resolveAddrLocked()
+type httpClient struct {
+	http.Client
+	remoteAddr net.Addr
 }
 
-func (c *Client) resolveAddrLocked() (*net.TCPAddr, error) {
-	if c.cacheAddr != nil {
-		return c.cacheAddr, nil
+func (c *Client) newTransport() (ts http.RoundTripper) {
+	var (
+		mu           sync.Mutex
+		resolvedAddr string
+		resolveErr   error
+	)
+
+	if c.ResolveAddr != "" {
+		resolvedAddr, resolveErr = GetHostPortAddr(c.ResolveAddr, "443")
 	}
 
-	if c.Addr != nil {
-		c.cacheAddr = c.Addr
-	} else {
-		addr := c.Host
-		if _, _, err := net.SplitHostPort(c.Host); err != nil {
-			addr = net.JoinHostPort(addr, "443")
-		}
-		tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
-		if err != nil {
-			return nil, err
-		}
-		c.cacheAddr = tcpAddr
+	return &http2.Transport{
+		DialTLS: func(network, addr string, cfg *tls.Config) (conn net.Conn, err error) {
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+
+			mu.Lock()
+			locked := true
+			if resolvedAddr != "" {
+				addr = resolvedAddr
+				mu.Unlock()
+				locked = false
+			}
+			defer func() {
+				if locked {
+					mu.Unlock()
+				}
+			}()
+
+			conn, err = net.Dial(network, addr)
+			if err != nil {
+				return nil, err
+			}
+
+			if locked {
+				resolvedAddr = conn.RemoteAddr().String()
+				mu.Unlock()
+				locked = false
+
+				c.mu.Lock()
+				if c.hc != nil && c.hc.Transport == ts {
+					c.hc.remoteAddr = conn.RemoteAddr()
+				}
+				c.mu.Unlock()
+			}
+
+			if !c.UseH2C {
+				// http2: Transport.dialTLSDefault
+				cn := tls.Client(conn, cfg)
+				if err := cn.Handshake(); err != nil {
+					return nil, err
+				}
+				if !cfg.InsecureSkipVerify {
+					if err := cn.VerifyHostname(cfg.ServerName); err != nil {
+						return nil, err
+					}
+				}
+				state := cn.ConnectionState()
+				if p := state.NegotiatedProtocol; p != http2.NextProtoTLS {
+					return nil, fmt.Errorf("http2: unexpected ALPN protocol %q; want %q", p, http2.NextProtoTLS)
+				}
+				if !state.NegotiatedProtocolIsMutual {
+					return nil, errors.New("http2: could not negotiate protocol mutually")
+				}
+				conn = cn
+			}
+
+			return conn, nil
+		},
+		TLSClientConfig: c.TLSConfig,
 	}
-	c.logger().Infof("server address is %s", c.cacheAddr)
-	return c.cacheAddr, nil
 }
 
-// FlushAddr ...
-func (c *Client) FlushAddr() {
+func (c *Client) httpClient() *httpClient {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.hc != nil {
+		return c.hc
+	}
+	c.hc = &httpClient{
+		Client: http.Client{
+			Transport: c.newTransport(),
+		},
+	}
+	return c.hc
+}
+
+// FlushResolvedAddr ...
+func (c *Client) FlushResolvedAddr() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.cacheAddr = nil
 	if c.hc != nil {
 		c.hc.CloseIdleConnections()
 		c.hc = nil
 	}
 }
 
-func (c *Client) h2Transport(resolveAddr *net.TCPAddr) http.RoundTripper {
-	return &http2.Transport{
-		DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
-			if resolveAddr != nil {
-				addr = resolveAddr.String()
-			}
-			if c.UseH2C {
-				return net.Dial(network, addr)
-			}
-			// http2: Transport.dialTLSDefault
-			cn, err := tls.Dial(network, addr, cfg)
-			if err != nil {
-				return nil, err
-			}
-			if err := cn.Handshake(); err != nil {
-				return nil, err
-			}
-			if !cfg.InsecureSkipVerify {
-				if err := cn.VerifyHostname(cfg.ServerName); err != nil {
-					return nil, err
-				}
-			}
-			state := cn.ConnectionState()
-			if p := state.NegotiatedProtocol; p != http2.NextProtoTLS {
-				return nil, fmt.Errorf("http2: unexpected ALPN protocol %q; want %q", p, http2.NextProtoTLS)
-			}
-			if !state.NegotiatedProtocolIsMutual {
-				return nil, errors.New("http2: could not negotiate protocol mutually")
-			}
-			return cn, nil
-		},
-	}
-}
-
-func (c *Client) httpClient() (*http.Client, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.hc != nil {
-		return c.hc, nil
-	}
-	srvAddr, err := c.resolveAddrLocked()
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve host: %v", err)
-	}
-	c.hc = &http.Client{
-		Transport: c.h2Transport(srvAddr),
-	}
-	return c.hc, nil
-}
-
 func (c *Client) url(path string) *url.URL {
 	return &url.URL{
 		Scheme: "https",
 		Host:   c.Host,
-		Path:   path,
+		Path:   c.URLPrefix + path,
 	}
 }
 
@@ -285,21 +299,21 @@ func (e *ClientAPIError) Temporary() bool {
 	return e.temp
 }
 
+type contextKey int
+
+var keyGetClientRemoteAddr contextKey
+
 func (c *Client) doReq(req *http.Request) (*http.Response, error) {
 	c.setAuth(req)
 
-	hc, err := c.httpClient()
-	if err != nil {
-		return nil, &ClientAPIError{Err: err, temp: true}
-	}
+	hc := c.httpClient()
 	res, err := hc.Do(req)
 	if err != nil {
-		if e, ok := err.(*url.Error); ok && e.Err == context.Canceled {
-			err = &ClientAPIError{Err: context.Canceled, temp: false}
-		} else {
-			err = &ClientAPIError{Err: err, temp: true}
+		temp := true
+		if req.Context().Err() != nil {
+			temp = false
 		}
-		return nil, err
+		return nil, &ClientAPIError{Err: err, temp: temp}
 	}
 
 	if res.StatusCode != http.StatusOK {
@@ -314,6 +328,10 @@ func (c *Client) doReq(req *http.Request) (*http.Response, error) {
 			Err:  &statusError{res.StatusCode, string(msg)},
 			temp: isStatusRetryable(res.StatusCode),
 		}
+	}
+
+	if pAddr, ok := req.Context().Value(keyGetClientRemoteAddr).(*net.Addr); ok {
+		*pAddr = hc.remoteAddr
 	}
 
 	return res, nil
@@ -340,9 +358,9 @@ func (c *Client) RequestIPv4(ctx context.Context) (ip net.IP, ttl time.Duration,
 	}
 	err = json.NewDecoder(res.Body).Decode(&result)
 	if err != nil {
-		var temp bool
-		if _, ok := err.(*json.SyntaxError); !ok {
-			temp = true
+		temp := true
+		if _, ok := err.(*json.SyntaxError); ok {
+			temp = false
 		}
 		err = &ClientAPIError{Err: fmt.Errorf("failed to decode ip result, error: %s", err), temp: temp}
 		return
@@ -371,7 +389,7 @@ func (s *httpClientStream) Close() error {
 }
 
 // OpenTunnel ...
-func (c *Client) OpenTunnel(ctx context.Context, ip net.IP) (func(context.Context) error, error) {
+func (c *Client) OpenTunnel(ctx context.Context, ip net.IP) (tunnel func(context.Context) error, remoteAddr net.Addr, err error) {
 	r, w := io.Pipe()
 	req := &http.Request{
 		Method: "POST",
@@ -382,18 +400,18 @@ func (c *Client) OpenTunnel(ctx context.Context, ip net.IP) (func(context.Contex
 		Body: ioutil.NopCloser(r),
 	}
 	// TODO 这里不能直接使用 ctx 作为 req 的 Context, 我们需要保持 req.Body 和 res.Body 组成的双向流
-	res, err := c.doReq(req.WithContext(context.TODO()))
+	res, err := c.doReq(req.WithContext(context.WithValue(context.TODO(), keyGetClientRemoteAddr, &remoteAddr)))
 	if err != nil {
 		w.Close()
-		return nil, err
+		return
 	}
 	return func(ctx context.Context) error {
 		return c.serveTunnel(ctx, &httpClientStream{res.Body, w})
-	}, nil
+	}, remoteAddr, nil
 }
 
 // RunClient ...
-func RunClient(ctx context.Context, c *Client, iface io.ReadWriteCloser, setupTun func(localIP net.IP) (reset func(), err error)) (err error) {
+func RunClient(ctx context.Context, c *Client, iface io.ReadWriteCloser, setupTun func(tunIP net.IP, remoteAddr net.Addr) (reset func(), err error)) (err error) {
 	defer iface.Close()
 
 	log := c.logger()
@@ -411,7 +429,7 @@ func RunClient(ctx context.Context, c *Client, iface io.ReadWriteCloser, setupTu
 
 		log.Infof("client get ip (%s) ttl (%d)", ip, ttl)
 
-		tunnel, err := c.OpenTunnel(ctx, ip)
+		tunnel, remoteAddr, err := c.OpenTunnel(ctx, ip)
 		if err != nil {
 			cancel()
 			return nil, err
@@ -419,7 +437,7 @@ func RunClient(ctx context.Context, c *Client, iface io.ReadWriteCloser, setupTu
 
 		cancel()
 
-		reset, err := setupTun(ip)
+		reset, err := setupTun(ip, remoteAddr)
 		if err != nil {
 			tunnel(ctx) // use a canceled ctx to terminate the tunnel
 			return nil, fmt.Errorf("setup tunnel error: %v", err)
@@ -447,43 +465,51 @@ func RunClient(ctx context.Context, c *Client, iface io.ReadWriteCloser, setupTu
 	go func() {
 		defer wg.Done()
 		e := c.ServeIface(ctx, iface)
-		if e == context.Canceled {
-			exit(context.Canceled)
+		if ctx.Err() != nil {
+			exit(ctx.Err())
 		} else {
 			exit(fmt.Errorf("serve iface exited: %v", e))
 		}
 	}()
 
+	firstRound := true
 	for {
 		tunnel, e := openTunnel(ctx)
+		if ctx.Err() != nil {
+			exit(ctx.Err())
+			break
+		}
 		if e != nil {
 			if ae, ok := e.(*ClientAPIError); ok {
-				if ae.Temporary() {
-					log.Errorf("failed to open tunnel: %v", e)
-					goto RETRY
-				}
-				if ae.Err == context.Canceled {
-					e = context.Canceled
+				if firstRound && !ae.Temporary() {
+					exit(e)
+					break
 				}
 			}
-			exit(e)
-			break
+			log.Errorf("failed to open tunnel: %v", e)
+			goto RETRY
 		}
 
 		log.Info("tunnel opened")
 
 		e = tunnel(ctx)
-		if e == context.Canceled {
+		if ctx.Err() != nil {
 			log.Info("tunnel closed")
-			exit(context.Canceled)
+			exit(ctx.Err())
 			break
 		}
 		log.Errorf("tunnel closed: %v", e)
 
+		firstRound = false
+
 	RETRY:
+		if ctx.Err() != nil {
+			exit(ctx.Err())
+			break
+		}
 		// TODO exponential backoff
 		time.Sleep(1 * time.Second)
-		c.FlushAddr()
+		c.FlushResolvedAddr()
 	}
 
 	wg.Wait()

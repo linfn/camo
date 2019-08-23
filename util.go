@@ -2,6 +2,7 @@ package camo
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
 )
 
@@ -38,4 +39,17 @@ func (r RollBack) Do() {
 	for i := len(r) - 1; i >= 0; i-- {
 		r[i]()
 	}
+}
+
+// GetHostPortAddr ...
+func GetHostPortAddr(addr string, defaultPort string) (string, error) {
+	_, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		addr = net.JoinHostPort(addr, defaultPort)
+		_, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			return "", err
+		}
+	}
+	return addr, nil
 }
