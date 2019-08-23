@@ -152,6 +152,14 @@ func (s *Server) sessionTTL() time.Duration {
 	return s.SessionTTL
 }
 
+func ipSessionKey(ip net.IP) string {
+	ip4 := ip.To4()
+	if ip4 != nil {
+		return string(ip4)
+	}
+	return string(ip)
+}
+
 func (s *Server) createSessionLocked(ip net.IP, cid string) *session {
 	if s.ipSession == nil {
 		s.ipSession = make(map[string]*session)
@@ -184,7 +192,7 @@ func (s *Server) createSessionLocked(ip net.IP, cid string) *session {
 		timer = startTimer()
 	}
 
-	s.ipSession[ip.String()] = ss
+	s.ipSession[ipSessionKey(ip)] = ss
 	if ip.To4() != nil {
 		s.cidIPv4Session[cid] = ss
 	} else {
@@ -197,7 +205,7 @@ func (s *Server) createSessionLocked(ip net.IP, cid string) *session {
 func (s *Server) getSession(ip net.IP) (*session, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	ss, ok := s.ipSession[ip.String()]
+	ss, ok := s.ipSession[ipSessionKey(ip)]
 	return ss, ok
 }
 
@@ -205,7 +213,7 @@ func (s *Server) getOrCreateSession(ip net.IP, cid string) (*session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	ss, ok := s.ipSession[ip.String()]
+	ss, ok := s.ipSession[ipSessionKey(ip)]
 	if ok {
 		if ss.cid != cid {
 			return nil, ErrIPConflict
@@ -231,8 +239,8 @@ func (s *Server) getOrCreateSession(ip net.IP, cid string) (*session, error) {
 
 func (s *Server) removeSession(ip net.IP) {
 	s.mu.Lock()
-	if ss, ok := s.ipSession[ip.String()]; ok {
-		delete(s.ipSession, ip.String())
+	if ss, ok := s.ipSession[ipSessionKey(ip)]; ok {
+		delete(s.ipSession, ipSessionKey(ip))
 		if ip.To4() != nil {
 			delete(s.cidIPv4Session, ss.cid)
 		} else {
