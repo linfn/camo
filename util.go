@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"strings"
 )
 
 func runCmd(name string, arg ...string) error {
@@ -52,4 +53,25 @@ func GetHostPortAddr(addr string, defaultPort string) (string, error) {
 		}
 	}
 	return addr, nil
+}
+
+// IsIPv4 ...
+func IsIPv4(ip string) bool {
+	if strings.Index(ip, "/") >= 0 {
+		netIP, _, err := net.ParseCIDR(ip)
+		if err != nil {
+			return false
+		}
+		return netIP.To4() != nil
+	}
+	netIP := net.ParseIP(ip)
+	if netIP == nil {
+		return false
+	}
+	return netIP.To4() != nil
+}
+
+func toCIDR(ip net.IP, mask net.IPMask) string {
+	ones, _ := mask.Size()
+	return fmt.Sprintf("%s/%d", ip, ones)
 }

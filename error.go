@@ -22,7 +22,7 @@ func (e *statusError) Error() string {
 	if msg == "" {
 		return fmt.Sprintf("code %d", e.status)
 	}
-	return fmt.Sprintf("code %d: %s", e.status, msg)
+	return msg
 }
 
 func getStatusCode(err error) int {

@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"expvar"
 	"flag"
 	stdlog "log"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -19,18 +21,17 @@ import (
 	"golang.org/x/net/http2/h2c"
 )
 
-var (
-	log            *camo.LevelLogger
-	camoDir        = getCamoDir()
-	defaultCertDir = camoDir + "/certs"
-)
+var defaultCertDir = getCamoDir() + "/certs"
 
 var (
-	help          = flag.Bool("h", false, "help")
+	help          = flag.Bool("help", false, "help")
 	addr          = flag.String("listen", ":443", "listen address")
 	password      = flag.String("password", "", "Set a password. It is recommended to use the environment variable CAMO_PASSWORD to set the password.")
-	ifaceIPv4     = flag.String("ipv4", "10.20.0.1/24", "iface ipv4 cidr")
-	mtu           = flag.Int("mtu", camo.DefaultMTU, "mtu")
+	mtu           = flag.Int("mtu", camo.DefaultMTU, "tun mtu")
+	tunIPv4       = flag.String("ip4", "", "tun ipv4 cidr")
+	tunIPv6       = flag.String("ip6", "", "tun ipv6 cidr")
+	enableNAT4    = flag.Bool("nat4", false, "enable NAT for IPv4")
+	enableNAT6    = flag.Bool("nat6", false, "enable NAT for IPv6")
 	autocertHost  = flag.String("autocert-host", "", "hostname")
 	autocertDir   = flag.String("autocert-dir", defaultCertDir, "cert cache directory")
 	autocertEmail = flag.String("autocert-email", "", "(optional) email address")
@@ -39,53 +40,59 @@ var (
 	enablePProf   = flag.Bool("pprof", false, "enable pprof")
 )
 
-func main() {
+var (
+	log *camo.LevelLogger
+)
+
+func init() {
 	flag.Parse()
 	if *help {
-		flag.Usage()
 		return
 	}
 
 	initLog()
 
-	if !*useH2C {
-		if *autocertHost == "" {
-			log.Fatal("missing autocert-host")
+	if *password == "" {
+		*password = os.Getenv("CAMO_PASSWORD")
+		if *password == "" {
+			log.Fatal("missing password")
 		}
 	}
 
-	password := ensurePassword()
-
-	iface, err := camo.NewTun(*mtu)
-	if err != nil {
-		log.Fatalf("failed to create tun device: %v", err)
+	if *tunIPv4 == "" && *tunIPv6 == "" {
+		log.Fatal("missing ip4 and ip6 config")
+	} else {
+		if *tunIPv4 != "" {
+			if _, _, err := net.ParseCIDR(*tunIPv4); err != nil {
+				log.Fatalf("invalid IPv4 cidr: %v", err)
+			}
+		}
+		if *tunIPv6 != "" {
+			if _, _, err := net.ParseCIDR(*tunIPv6); err != nil {
+				log.Fatalf("invalid IPv6 cidr: %v", err)
+			}
+		}
 	}
-	defer iface.Close()
 
-	err = iface.SetIPv4(*ifaceIPv4)
-	if err != nil {
-		log.Panic(err)
+	if !*useH2C && *autocertHost == "" {
+		log.Fatal("missing autocert-host")
 	}
-	log.Infof("%s(%s) up", iface.Name(), iface.CIDR4())
+}
 
-	resetNAT, err := camo.SetupNAT(iface.Subnet4().String())
-	if err != nil {
-		log.Panic(err)
+func main() {
+	if *help {
+		flag.Usage()
+		return
 	}
-	defer resetNAT()
 
-	ipv4Pool := camo.NewSubnetIPPool(iface.Subnet4(), 256)
-	ipv4Pool.Use(iface.IPv4(), "")
+	var defers camo.RollBack
+	defer defers.Do()
+
+	iface := initTun(&defers)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	srv := camo.Server{
-		MTU:      *mtu,
-		IPv4Pool: ipv4Pool,
-		Logger:   log,
-	}
-
-	expvar.Publish("camo", srv.Metrics())
+	srv := initServer()
 
 	mux := http.NewServeMux()
 	mux.Handle("/", withLog(log, srv.Handler(ctx, "")))
@@ -94,21 +101,7 @@ func main() {
 		handlePProf(mux)
 	}
 
-	handler := camo.WithAuth(mux, password, log)
-
-	hsrv := http.Server{Addr: *addr}
-	if *useH2C {
-		hsrv.Handler = h2c.NewHandler(handler, &http2.Server{})
-	} else {
-		certMgr := autocert.Manager{
-			Prompt:     autocert.AcceptTOS,
-			Cache:      autocert.DirCache(*autocertDir),
-			HostPolicy: autocert.HostWhitelist(*autocertHost),
-			Email:      *autocertEmail,
-		}
-		hsrv.TLSConfig = certMgr.TLSConfig()
-		hsrv.Handler = handler
-	}
+	hsrv := initHTTPServer(camo.WithAuth(mux, *password, log))
 
 	var exitOnce sync.Once
 	exit := func(err error) {
@@ -141,7 +134,7 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if hsrv.TLSConfig != nil {
+		if !*useH2C {
 			exit(hsrv.ListenAndServeTLS("", ""))
 		} else {
 			exit(hsrv.ListenAndServe())
@@ -149,14 +142,6 @@ func main() {
 	}()
 
 	wg.Wait()
-}
-
-func initLog() {
-	logLevel, ok := camo.LogLevelValues[strings.ToUpper(*logLevel)]
-	if !ok {
-		stdlog.Fatal("invalid log level")
-	}
-	log = camo.NewLogger(stdlog.New(os.Stderr, "", stdlog.LstdFlags|stdlog.Llongfile), logLevel)
 }
 
 func getCamoDir() string {
@@ -167,23 +152,103 @@ func getCamoDir() string {
 	return ".camo"
 }
 
-func ensureCamoDir() {
-	err := os.MkdirAll(camoDir, os.ModePerm)
+func initLog() {
+	logLevel, ok := camo.LogLevelValues[strings.ToUpper(*logLevel)]
+	if !ok {
+		stdlog.Fatal("invalid log level")
+	}
+	log = camo.NewLogger(stdlog.New(os.Stderr, "", stdlog.LstdFlags|stdlog.Llongfile), logLevel)
+}
+
+func initTun(defers *camo.RollBack) *camo.Iface {
+	iface, err := camo.NewTun(*mtu)
 	if err != nil {
-		log.Panicf("failed to create camo dir. path: %s, error: %v", camoDir, err)
+		log.Panicf("failed to create tun device: %v", err)
+	}
+	defers.Add(func() { iface.Close() })
+
+	log.Infof("tun(%s) up", iface.Name())
+
+	if *tunIPv4 != "" {
+		if err := iface.SetIPv4(*tunIPv4); err != nil {
+			log.Panicf("failed to set %s IPv4 address %s: %v", iface.Name(), *tunIPv4, err)
+		}
+		log.Infof("set %s IPv4 address at %s", iface.Name(), *tunIPv4)
+	}
+	if *tunIPv6 != "" {
+		if err := iface.SetIPv6(*tunIPv6); err != nil {
+			log.Panicf("failed to set %s IPv4 address %s: %v", iface.Name(), *tunIPv6, err)
+		}
+		log.Infof("set %s IPv6 address at %s", iface.Name(), *tunIPv6)
+	}
+
+	if *enableNAT4 {
+		resetNAT4, err := camo.SetupNAT(iface.Subnet4().String())
+		if err != nil {
+			log.Panicf("failed to setup nat4: %v", err)
+		}
+		defers.Add(resetNAT4)
+	}
+	if *enableNAT6 {
+		resetNAT6, err := camo.SetupNAT(iface.Subnet6().String())
+		if err != nil {
+			log.Panicf("failed to setup nat6: %v", err)
+		}
+		defers.Add(resetNAT6)
+	}
+
+	return iface
+}
+
+func initServer() *camo.Server {
+	srv := &camo.Server{
+		MTU:    *mtu,
+		Logger: log,
+	}
+	initIPPool(srv)
+	expvar.Publish("camo", srv.Metrics())
+	return srv
+}
+
+func initIPPool(srv *camo.Server) {
+	if *tunIPv4 != "" {
+		ip, subnet, err := net.ParseCIDR(*tunIPv4)
+		if err != nil {
+			log.Panic(err)
+		}
+		srv.IPv4Pool = camo.NewSubnetIPPool(subnet, 256)
+		srv.IPv4Pool.Use(ip, "")
+	}
+
+	if *tunIPv6 != "" {
+		ip, subnet, err := net.ParseCIDR(*tunIPv6)
+		if err != nil {
+			log.Panic(err)
+		}
+		srv.IPv6Pool = camo.NewSubnetIPPool(subnet, 256)
+		srv.IPv6Pool.Use(ip, "")
 	}
 }
 
-func ensurePassword() string {
-	p := *password
-	if p != "" {
-		return p
+func initHTTPServer(handler http.Handler) *http.Server {
+	hsrv := &http.Server{Addr: *addr}
+	if *useH2C {
+		hsrv.Handler = h2c.NewHandler(handler, &http2.Server{})
+	} else {
+		hsrv.TLSConfig = initTLSConfig()
+		hsrv.Handler = handler
 	}
-	p = os.Getenv("CAMO_PASSWORD")
-	if p == "" {
-		log.Fatal("missing password")
+	return hsrv
+}
+
+func initTLSConfig() *tls.Config {
+	certMgr := autocert.Manager{
+		Prompt:     autocert.AcceptTOS,
+		Cache:      autocert.DirCache(*autocertDir),
+		HostPolicy: autocert.HostWhitelist(*autocertHost),
+		Email:      *autocertEmail,
 	}
-	return p
+	return certMgr.TLSConfig()
 }
 
 func withLog(log camo.Logger, h http.Handler) http.Handler {

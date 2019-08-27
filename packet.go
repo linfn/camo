@@ -4,63 +4,179 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"sync"
-
-	"golang.org/x/net/ipv4"
-	"golang.org/x/net/ipv6"
 )
 
 // DefaultMTU TODO
 const DefaultMTU = 1400
 
-var (
-	errBadPacketRead = errors.New("bad packet read")
+const (
+	// IPv4HeaderLen is IPv4 header length without extension headers
+	IPv4HeaderLen = 20
+	// IPv6HeaderLen is IPv6 header length without extension headers
+	IPv6HeaderLen = 40
 )
 
-func parseIPv4Header(h *ipv4.Header, b []byte) error {
-	err := h.Parse(b)
-	if err != nil {
-		return err
+// GetIPPacketVersion gets ip protocol version from ip packet
+func GetIPPacketVersion(b []byte) int {
+	return int(b[0] >> 4)
+}
+
+// IPv4Header represents an IPv4 header
+type IPv4Header []byte
+
+// Version is protocol version
+func (b IPv4Header) Version() int {
+	return int(b[0] >> 4)
+}
+
+// Len is header length
+func (b IPv4Header) Len() int {
+	return int(b[0]&0x0f) << 2
+}
+
+// TOS is type-of-service
+func (b IPv4Header) TOS() int {
+	return int(b[1])
+}
+
+// TotalLen is packet total length
+func (b IPv4Header) TotalLen() int {
+	return int(binary.BigEndian.Uint16(b[2:4]))
+}
+
+// ID is identification
+func (b IPv4Header) ID() int {
+	return int(binary.BigEndian.Uint16(b[4:6]))
+}
+
+// Flags is IPv4 flags
+func (b IPv4Header) Flags() int {
+	return (int(binary.BigEndian.Uint16(b[6:8])) & 0xe000) >> 13
+}
+
+// FragOff is fragment offset
+func (b IPv4Header) FragOff() int {
+	return int(binary.BigEndian.Uint16(b[6:8])) & 0x1fff
+}
+
+// TTL is time-to-live
+func (b IPv4Header) TTL() int {
+	return int(b[8])
+}
+
+// Protocol is next protocol
+func (b IPv4Header) Protocol() int {
+	return int(b[9])
+}
+
+// Checksum is IPv4 header checksum
+func (b IPv4Header) Checksum() int {
+	return int(binary.BigEndian.Uint16(b[10:12]))
+}
+
+// Src is source address
+func (b IPv4Header) Src() net.IP {
+	return net.IP(b[12:16])
+}
+
+// Dst is destination address
+func (b IPv4Header) Dst() net.IP {
+	return net.IP(b[16:20])
+}
+
+// Options is extension headers
+func (b IPv4Header) Options() []byte {
+	hdrlen := b.Len()
+	if hdrlen > IPv4HeaderLen {
+		if len(b) >= hdrlen {
+			return b[IPv4HeaderLen:hdrlen]
+		}
+		return b[IPv4HeaderLen:]
 	}
-	// golang.org/x/net/ipv4 Parse use raw IP socket format, tuntap use wire format
-	h.TotalLen = int(binary.BigEndian.Uint16(b[2:4]))
-	h.FragOff = int(binary.BigEndian.Uint16(b[6:8]))
 	return nil
 }
 
-func getVersion(b []byte) int {
-	return int(b[0] >> 4)
+func (b IPv4Header) String() string {
+	return fmt.Sprintf("ver=%d hdrlen=%d tos=%#x totallen=%d id=%#x flags=%#x fragoff=%#x ttl=%d proto=%d cksum=%#x src=%v dst=%v", b.Version(), b.Len(), b.TOS(), b.TotalLen(), b.ID(), b.Flags(), b.FragOff(), b.TTL(), b.Protocol(), b.Checksum(), b.Src(), b.Dst())
 }
-func getIPv4TotalLen(b []byte) int {
-	return int(binary.BigEndian.Uint16(b[2:4]))
+
+// IPv6Header represents an IPv6 base header
+type IPv6Header []byte
+
+// Version is protocol version
+func (b IPv6Header) Version() int {
+	return int(b[0]) >> 4
 }
-func getIPv6TotalLen(b []byte) int {
-	// how to handle jumbo frame?
-	return int(binary.BigEndian.Uint16(b[4:6])) + ipv6.HeaderLen
+
+// TrafficClass is traffic class
+func (b IPv6Header) TrafficClass() int {
+	return int(b[0]&0x0f)<<4 | int(b[1])>>4
 }
+
+// FlowLabel is flow label
+func (b IPv6Header) FlowLabel() int {
+	return int(b[1]&0x0f)<<16 | int(b[2])<<8 | int(b[3])
+}
+
+// PayloadLen is payload length
+func (b IPv6Header) PayloadLen() int {
+	return int(binary.BigEndian.Uint16(b[4:6]))
+}
+
+// NextHeader is next header
+func (b IPv6Header) NextHeader() int {
+	return int(b[6])
+}
+
+// HopLimit is hop limit
+func (b IPv6Header) HopLimit() int {
+	return int(b[7])
+}
+
+// Src is source address
+func (b IPv6Header) Src() net.IP {
+	return net.IP(b[8:24])
+}
+
+// Dst is destination address
+func (b IPv6Header) Dst() net.IP {
+	return net.IP(b[24:40])
+}
+
+func (b IPv6Header) String() string {
+	return fmt.Sprintf("ver=%d tclass=%#x flowlbl=%#x payloadlen=%d nxthdr=%d hoplim=%d src=%v dst=%v", b.Version(), b.TrafficClass(), b.FlowLabel(), b.PayloadLen(), b.NextHeader(), b.HopLimit(), b.Src(), b.Dst())
+}
+
+var (
+	errBadPacketRead = errors.New("bad packet read")
+)
 
 type packetIO struct {
 	rw io.ReadWriteCloser
 }
 
 func (p *packetIO) Read(b []byte) (int, error) {
-	if len(b) < ipv4.HeaderLen {
+	if len(b) < IPv4HeaderLen {
 		return 0, io.ErrShortBuffer
 	}
-	n, err := io.ReadFull(p.rw, b[:ipv4.HeaderLen])
+	n, err := io.ReadFull(p.rw, b[:IPv4HeaderLen])
 	if err != nil {
 		return 0, err
 	}
 	var totalLen int
-	switch getVersion(b) {
+	switch GetIPPacketVersion(b) {
 	case 4:
-		totalLen = getIPv4TotalLen(b)
-		if totalLen < ipv4.HeaderLen {
+		totalLen = IPv4Header(b).TotalLen()
+		if totalLen < IPv4HeaderLen {
 			return 0, errBadPacketRead
 		}
 	case 6:
-		totalLen = getIPv6TotalLen(b)
+		// how to handle jumbo frame?
+		totalLen = IPv6Header(b).PayloadLen() + IPv6HeaderLen
 	default:
 		return 0, errBadPacketRead
 	}

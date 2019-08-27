@@ -11,11 +11,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
 	"golang.org/x/net/http2"
-	"golang.org/x/net/ipv4"
 )
 
 const (
@@ -112,18 +112,30 @@ func (c *Client) ServeIface(ctx context.Context, iface io.ReadWriteCloser) error
 		rw              = WithIOMetric(iface, metrics.Iface)
 		tunnelWriteChan = c.getTunnelWriteChan()
 		bufpool         = c
-		h               ipv4.Header
 	)
 	return serveIO(ctx, rw, bufpool, func(done <-chan struct{}, pkt []byte) (retainBuf bool) {
-		if e := parseIPv4Header(&h, pkt); e != nil {
-			log.Warn("iface failed to parse ipv4 header:", e)
+		ver := GetIPPacketVersion(pkt)
+
+		if log.Level() >= LogLevelTrace {
+			if ver == 4 {
+				log.Tracef("iface recv: %s", IPv4Header(pkt))
+			} else {
+				log.Tracef("iface recv: %s", IPv6Header(pkt))
+			}
+		}
+
+		var dstIP net.IP
+		if ver == 4 {
+			dstIP = IPv4Header(pkt).Dst()
+		} else {
+			dstIP = IPv6Header(pkt).Dst()
+		}
+
+		if !dstIP.IsGlobalUnicast() {
+			log.Tracef("iface drop packet: not a global unicast, dstIP %s", dstIP)
 			return
 		}
-		if h.Version != 4 {
-			log.Tracef("iface drop ip version %d", h.Version)
-			return
-		}
-		log.Tracef("iface recv: %s", &h)
+
 		select {
 		case tunnelWriteChan <- pkt:
 			retainBuf = true
@@ -135,7 +147,7 @@ func (c *Client) ServeIface(ctx context.Context, iface io.ReadWriteCloser) error
 	}, c.getIfaceWriteChan(), nil)
 }
 
-func (c *Client) serveTunnel(ctx context.Context, rw io.ReadWriteCloser) error {
+func (c *Client) serveTunnel(ctx context.Context, rw io.ReadWriteCloser, localIP net.IP) error {
 	metrics := c.Metrics().Tunnels
 
 	metrics.Streams.Add(1)
@@ -148,14 +160,30 @@ func (c *Client) serveTunnel(ctx context.Context, rw io.ReadWriteCloser) error {
 		ifaceWriteChan = c.getIfaceWriteChan()
 		postWrite      = func(<-chan struct{}, error) { metrics.Lags.Add(-1) }
 		bufpool        = c
-		h              ipv4.Header
 	)
 	return serveIO(ctx, rw, bufpool, func(done <-chan struct{}, pkt []byte) (retainBuf bool) {
-		if e := parseIPv4Header(&h, pkt); e != nil {
-			log.Warn("tunnel failed to parse ipv4 header:", e)
+		ver := GetIPPacketVersion(pkt)
+
+		if log.Level() >= LogLevelTrace {
+			if ver == 4 {
+				log.Tracef("tunnel recv: %s", IPv4Header(pkt))
+			} else {
+				log.Tracef("tunnel recv: %s", IPv6Header(pkt))
+			}
+		}
+
+		var dstIP net.IP
+		if ver == 4 {
+			dstIP = IPv4Header(pkt).Dst()
+		} else {
+			dstIP = IPv6Header(pkt).Dst()
+		}
+
+		if !dstIP.Equal(localIP) {
+			log.Tracef("tunnel drop packet: dst %s mismatched", dstIP)
 			return
 		}
-		log.Tracef("tunnel recv: %s", &h)
+
 		select {
 		case ifaceWriteChan <- pkt:
 			retainBuf = true
@@ -174,26 +202,24 @@ type httpClient struct {
 func (c *Client) newTransport(hc *httpClient) (ts http.RoundTripper) {
 	var (
 		mu           sync.Mutex
-		resolvedAddr string
-		resolveErr   error
+		resolvedAddr net.Addr
 	)
-
-	if c.ResolveAddr != "" {
-		resolvedAddr, resolveErr = GetHostPortAddr(c.ResolveAddr, "443")
-	}
-
 	return &http2.Transport{
 		DialTLS: func(network, addr string, cfg *tls.Config) (conn net.Conn, err error) {
-			if resolveErr != nil {
-				return nil, resolveErr
-			}
-
 			mu.Lock()
 			locked := true
-			if resolvedAddr != "" {
-				addr = resolvedAddr
+			if resolvedAddr != nil {
+				addr = resolvedAddr.String()
 				mu.Unlock()
 				locked = false
+			} else {
+				if c.ResolveAddr != "" {
+					addr, err = GetHostPortAddr(c.ResolveAddr, "443")
+					if err != nil {
+						mu.Unlock()
+						return nil, err
+					}
+				}
 			}
 			defer func() {
 				if locked {
@@ -207,11 +233,11 @@ func (c *Client) newTransport(hc *httpClient) (ts http.RoundTripper) {
 			}
 
 			if locked {
-				resolvedAddr = conn.RemoteAddr().String()
+				resolvedAddr = conn.RemoteAddr()
 				mu.Unlock()
 				locked = false
 
-				hc.remoteAddr = conn.RemoteAddr()
+				hc.remoteAddr = resolvedAddr
 			}
 
 			if !c.UseH2C {
@@ -330,11 +356,10 @@ func (c *Client) doReq(req *http.Request) (*http.Response, error) {
 	return res, nil
 }
 
-// RequestIPv4 ...
-func (c *Client) RequestIPv4(ctx context.Context) (ip net.IP, ttl time.Duration, err error) {
+func (c *Client) requestIP(ctx context.Context, ipVersion int) (ip net.IP, ttl time.Duration, err error) {
 	req := &http.Request{
 		Method: "POST",
-		URL:    c.url("/ip/v4"),
+		URL:    c.url("/ip/v" + strconv.Itoa(ipVersion)),
 		Header: http.Header{
 			headerClientID: []string{c.CID},
 		},
@@ -365,6 +390,16 @@ func (c *Client) RequestIPv4(ctx context.Context) (ip net.IP, ttl time.Duration,
 	}
 
 	return ip, time.Duration(result.TTL) * time.Second, nil
+}
+
+// RequestIPv4 ...
+func (c *Client) RequestIPv4(ctx context.Context) (ip net.IP, ttl time.Duration, err error) {
+	return c.requestIP(ctx, 4)
+}
+
+// RequestIPv6 ...
+func (c *Client) RequestIPv6(ctx context.Context) (ip net.IP, ttl time.Duration, err error) {
+	return c.requestIP(ctx, 6)
 }
 
 type httpClientStream struct {
@@ -399,112 +434,6 @@ func (c *Client) OpenTunnel(ctx context.Context, ip net.IP) (tunnel func(context
 		return
 	}
 	return func(ctx context.Context) error {
-		return c.serveTunnel(ctx, &httpClientStream{res.Body, w})
+		return c.serveTunnel(ctx, &httpClientStream{res.Body, w}, ip)
 	}, remoteAddr, nil
-}
-
-// RunClient ...
-func RunClient(ctx context.Context, c *Client, iface io.ReadWriteCloser, setupTun func(tunIP net.IP, remoteAddr net.Addr) (reset func(), err error)) (err error) {
-	defer iface.Close()
-
-	log := c.logger()
-
-	openTunnel := func(ctx context.Context) (func(context.Context) error, error) {
-		var err error
-
-		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-
-		ip, ttl, err := c.RequestIPv4(ctx)
-		if err != nil {
-			cancel()
-			return nil, err
-		}
-
-		log.Infof("client get ip (%s) ttl (%d)", ip, ttl)
-
-		tunnel, remoteAddr, err := c.OpenTunnel(ctx, ip)
-		if err != nil {
-			cancel()
-			return nil, err
-		}
-
-		cancel()
-
-		reset, err := setupTun(ip, remoteAddr)
-		if err != nil {
-			tunnel(ctx) // use a canceled ctx to terminate the tunnel
-			return nil, fmt.Errorf("setup tunnel error: %v", err)
-		}
-
-		return func(ctx context.Context) error {
-			defer reset()
-			return tunnel(ctx)
-		}, nil
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
-
-	var exitOnce sync.Once
-	exit := func(e error) {
-		exitOnce.Do(func() {
-			err = e
-			cancel()
-		})
-	}
-
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		e := c.ServeIface(ctx, iface)
-		if ctx.Err() != nil {
-			exit(ctx.Err())
-		} else {
-			exit(fmt.Errorf("serve iface exited: %v", e))
-		}
-	}()
-
-	firstRound := true
-	for {
-		tunnel, e := openTunnel(ctx)
-		if ctx.Err() != nil {
-			exit(ctx.Err())
-			break
-		}
-		if e != nil {
-			if ae, ok := e.(*ClientAPIError); ok {
-				if firstRound && !ae.Temporary() {
-					exit(e)
-					break
-				}
-			}
-			log.Errorf("failed to open tunnel: %v", e)
-			goto RETRY
-		}
-
-		log.Info("tunnel opened")
-
-		e = tunnel(ctx)
-		if ctx.Err() != nil {
-			log.Info("tunnel closed")
-			exit(ctx.Err())
-			break
-		}
-		log.Errorf("tunnel closed: %v", e)
-
-		firstRound = false
-
-	RETRY:
-		if ctx.Err() != nil {
-			exit(ctx.Err())
-			break
-		}
-		// TODO exponential backoff
-		time.Sleep(1 * time.Second)
-		c.FlushResolvedAddr()
-	}
-
-	wg.Wait()
-	return err
 }

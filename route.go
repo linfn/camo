@@ -40,7 +40,11 @@ func DelRoute(dst string, gateway string, dev string) error {
 }
 
 func getRouteIPRoute2(dst string) (gateway string, dev string, err error) {
-	b, err := runCmdOutput("ip", "route", "get", dst)
+	family := "-4"
+	if !IsIPv4(dst) {
+		family = "-6"
+	}
+	b, err := runCmdOutput("ip", family, "route", "get", dst)
 	if err != nil {
 		err = fmt.Errorf("ip route get %s error: %v", dst, err)
 		return
@@ -77,7 +81,11 @@ func getRouteIPRoute2(dst string) (gateway string, dev string, err error) {
 }
 
 func addRouteIPRoute2(dst string, gateway string, dev string) error {
-	args := []string{"route", "add", dst}
+	family := "-4"
+	if !IsIPv4(dst) {
+		family = "-6"
+	}
+	args := []string{family, "route", "add", dst}
 	if gateway != "" {
 		args = append(args, "via", gateway)
 	}
@@ -92,7 +100,11 @@ func addRouteIPRoute2(dst string, gateway string, dev string) error {
 }
 
 func delRouteIPRoute2(dst string, gateway string, dev string) error {
-	args := []string{"route", "del", dst}
+	family := "-4"
+	if !IsIPv4(dst) {
+		family = "-6"
+	}
+	args := []string{family, "route", "del", dst}
 	if gateway != "" {
 		args = append(args, "via", gateway)
 	}
@@ -107,7 +119,11 @@ func delRouteIPRoute2(dst string, gateway string, dev string) error {
 }
 
 func getRouteBSD(dst string) (gateway string, dev string, err error) {
-	b, err := runCmdOutput("route", "-n", "get", dst)
+	family := "-inet"
+	if !IsIPv4(dst) {
+		family = "-inet6"
+	}
+	b, err := runCmdOutput("route", "-n", "get", family, dst)
 	if err != nil {
 		err = fmt.Errorf("route get %s error: %v", dst, err)
 		return
@@ -124,7 +140,7 @@ func getRouteBSD(dst string) (gateway string, dev string, err error) {
 	for i := 0; i < len(b); {
 		n, line, e := bufio.ScanLines(b[i:], true)
 		if e != nil {
-			err = fmt.Errorf("ip route get %s error: %v", dst, e)
+			err = fmt.Errorf("route get %s error: %v", dst, e)
 			return
 		}
 		i += n
@@ -135,7 +151,7 @@ func getRouteBSD(dst string) (gateway string, dev string, err error) {
 		}
 	}
 	if dev == "" {
-		err = errors.New("route not found")
+		err = fmt.Errorf("route get %s not found", dst)
 		return
 	}
 	return gateway, dev, nil
@@ -143,7 +159,11 @@ func getRouteBSD(dst string) (gateway string, dev string, err error) {
 
 func addRouteBSD(dst string, gateway string, _ string) error {
 	// If the destination is directly reachable via an interface, the -interface modifier should be specified.
-	err := runCmd("route", "-n", "add", "-net", dst, gateway)
+	family := "-inet"
+	if !IsIPv4(dst) {
+		family = "-inet6"
+	}
+	err := runCmd("route", "-n", "add", "-net", family, dst, gateway)
 	if err != nil {
 		return fmt.Errorf("route add %s %s error: %v", dst, gateway, err)
 	}
@@ -151,7 +171,11 @@ func addRouteBSD(dst string, gateway string, _ string) error {
 }
 
 func delRouteBSD(dst string, gateway string, _ string) error {
-	err := runCmd("route", "-n", "delete", "-net", dst, gateway)
+	family := "-inet"
+	if !IsIPv4(dst) {
+		family = "-inet6"
+	}
+	err := runCmd("route", "-n", "delete", "-net", family, dst, gateway)
 	if err != nil {
 		return fmt.Errorf("route del %s %s error: %v", dst, gateway, err)
 	}
@@ -160,13 +184,16 @@ func delRouteBSD(dst string, gateway string, _ string) error {
 
 // SetupNAT ...
 func SetupNAT(src string) (cancel func(), err error) {
-	// TODO 考虑是否需要增加 "-o ! name" 来排除掉往 tun iface 中发的包
-	err = runCmd("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", src, "-j", "MASQUERADE")
+	cmd := "iptables"
+	if !IsIPv4(src) {
+		cmd = "ip6tables"
+	}
+	err = runCmd(cmd, "-t", "nat", "-A", "POSTROUTING", "-s", src, "-j", "MASQUERADE")
 	if err != nil {
 		return nil, fmt.Errorf("iptables error: %v", err)
 	}
 	return func() {
-		runCmd("iptables", "-t", "nat", "-D", "POSTROUTING", "-s", src, "-j", "MASQUERADE")
+		runCmd(cmd, "-t", "nat", "-D", "POSTROUTING", "-s", src, "-j", "MASQUERADE")
 	}, nil
 }
 
@@ -191,8 +218,19 @@ func RedirectGateway(dev string, gateway string) (reset func(), err error) {
 		return
 	}
 
-	add("0.0.0.0/1", gateway, dev)
-	add("128.0.0.0/1", gateway, dev)
+	if IsIPv4(gateway) {
+		add("0.0.0.0/1", gateway, dev)
+		add("128.0.0.0/1", gateway, dev)
+	} else {
+		//add("::/3", gateway, dev)
+
+		// Global Unicast
+		add("2000::/4", gateway, dev)
+		add("3000::/4", gateway, dev)
+
+		// Unique Local Unicast
+		add("fc00::/7", gateway, dev)
+	}
 
 	if err != nil {
 		return nil, err

@@ -10,8 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/net/ipv4"
 )
 
 const headerClientID = "camo-client-id"
@@ -115,21 +113,32 @@ func (s *Server) ServeIface(ctx context.Context, iface io.ReadWriteCloser) error
 		metrics = s.Metrics()
 		rw      = WithIOMetric(iface, metrics.Iface)
 		bufpool = s
-		h       ipv4.Header
 	)
 	return serveIO(ctx, rw, bufpool, func(_ <-chan struct{}, pkt []byte) (retainBuf bool) {
-		if e := parseIPv4Header(&h, pkt); e != nil {
-			log.Warn("iface failed to parse ipv4 header:", e)
-			return
+		ver := GetIPPacketVersion(pkt)
+
+		if log.Level() >= LogLevelTrace {
+			if ver == 4 {
+				log.Tracef("iface recv: %s", IPv4Header(pkt))
+			} else {
+				log.Tracef("iface recv: %s", IPv6Header(pkt))
+			}
 		}
-		if h.Version != 4 {
-			log.Tracef("iface drop ip version %d", h.Version)
-			return
+
+		var dstIP net.IP
+		if ver == 4 {
+			dstIP = IPv4Header(pkt).Dst()
+		} else {
+			dstIP = IPv6Header(pkt).Dst()
 		}
-		log.Tracef("iface recv: %s", &h)
-		ss, ok := s.getSession(h.Dst)
+
+		ss, ok := s.getSession(dstIP)
 		if !ok {
-			log.Tracef("iface drop packet to %s: missing session", h.Dst)
+			if !dstIP.IsGlobalUnicast() {
+				log.Tracef("iface drop packet: not a global unicast, dstIP %s", dstIP)
+			} else {
+				log.Tracef("iface drop packet to %s: missing session", dstIP)
+			}
 			return
 		}
 		select {
@@ -139,7 +148,7 @@ func (s *Server) ServeIface(ctx context.Context, iface io.ReadWriteCloser) error
 			return
 		default:
 			metrics.Tunnels.Drops.Add(1)
-			log.Tracef("iface drop packet to %s: channel full", h.Dst)
+			log.Tracef("iface drop packet to %s: channel full", dstIP)
 			return
 		}
 	}, s.getIfaceWriteChan(), nil)
@@ -266,11 +275,7 @@ func (s *Server) removeSession(ip net.IP) {
 	}
 }
 
-// RequestIPv4 ...
-func (s *Server) RequestIPv4(cid string) (ip net.IP, ttl time.Duration, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+func (s *Server) assignIPLocked(cid string, cidSession map[string]*session, ipPool IPPool) (ip net.IP, ttl time.Duration, err error) {
 	getTTL := func(ttl time.Duration, idle time.Duration) time.Duration {
 		d := ttl - idle
 		if d < 0 {
@@ -279,24 +284,38 @@ func (s *Server) RequestIPv4(cid string) (ip net.IP, ttl time.Duration, err erro
 		return d
 	}
 
-	ss, ok := s.cidIPv4Session[cid]
+	ss, ok := cidSession[cid]
 	if ok {
 		return ss.ip, getTTL(s.sessionTTL(), ss.idleDuration()), nil
 	}
 
-	if s.IPv4Pool == nil {
+	if ipPool == nil {
 		err = ErrNoIPConfig
 		return
 	}
 
-	ip, ok = s.IPv4Pool.Get(cid)
+	ip, ok = ipPool.Get(cid)
 	if !ok {
 		err = ErrUnableAssignIP
 		return
 	}
 
-	ss = s.createSessionLocked(ip, cid)
+	s.createSessionLocked(ip, cid)
 	return ip, s.sessionTTL(), nil
+}
+
+// RequestIPv4 ...
+func (s *Server) RequestIPv4(cid string) (ip net.IP, ttl time.Duration, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.assignIPLocked(cid, s.cidIPv4Session, s.IPv4Pool)
+}
+
+// RequestIPv6 ...
+func (s *Server) RequestIPv6(cid string) (ip net.IP, ttl time.Duration, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.assignIPLocked(cid, s.cidIPv6Session, s.IPv6Pool)
 }
 
 // OpenTunnel ...
@@ -324,18 +343,42 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 			log        = s.logger()
 			ifaceWrite = s.getIfaceWriteChan()
 			bufpool    = s
-			h          ipv4.Header
 		)
 		err := serveIO(ctx, rw, bufpool, func(done <-chan struct{}, pkt []byte) (retainBuf bool) {
-			if e := parseIPv4Header(&h, pkt); e != nil {
-				log.Warn("tunnel failed to parse ipv4 header:", e)
+			ver := GetIPPacketVersion(pkt)
+
+			if log.Level() >= LogLevelTrace {
+				if ver == 4 {
+					log.Tracef("tunnel recv: %s", IPv4Header(pkt))
+				} else {
+					log.Tracef("tunnel recv: %s", IPv6Header(pkt))
+				}
+			}
+
+			var (
+				srcIP net.IP
+				dstIP net.IP
+			)
+			if ver == 4 {
+				h := IPv4Header(pkt)
+				srcIP = h.Src()
+				dstIP = h.Dst()
+			} else {
+				h := IPv6Header(pkt)
+				srcIP = h.Src()
+				dstIP = h.Dst()
+			}
+
+			if !srcIP.Equal(ss.ip) {
+				log.Warnf("tunnel drop packet from %s: src %s mismatched", ss.ip, srcIP)
 				return
 			}
-			log.Tracef("tunnel recv: %s", &h)
-			if !h.Src.Equal(ss.ip) {
-				log.Warnf("tunnel drop packet from %s: src (%s) mismatched", ss.ip, h.Src)
+
+			if !dstIP.IsGlobalUnicast() {
+				log.Tracef("tunnel drop packet from %s: not a global unicast, dst %s", ss.ip, dstIP)
 				return
 			}
+
 			select {
 			case ifaceWrite <- pkt:
 				retainBuf = true
@@ -354,37 +397,51 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 // Handler ...
 func (s *Server) Handler(ctx context.Context, prefix string) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc(prefix+"/ip/v4", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" {
-			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-			return
-		}
 
-		cid := r.Header.Get(headerClientID)
-		if cid == "" {
-			http.Error(w, "missing "+headerClientID, http.StatusBadRequest)
-			return
-		}
+	ipHandler := func(version int) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != "POST" {
+				http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+				return
+			}
 
-		ip, ttl, err := s.RequestIPv4(cid)
-		if err != nil {
-			http.Error(w, err.Error(), getStatusCode(err))
-			return
-		}
+			cid := r.Header.Get(headerClientID)
+			if cid == "" {
+				http.Error(w, "missing "+headerClientID, http.StatusBadRequest)
+				return
+			}
 
-		w.Header().Set("Content-Type", "application/json")
-		err = json.NewEncoder(w).Encode(&struct {
-			IP  string `json:"ip"`
-			TTL int    `json:"ttl"`
-		}{
-			IP:  ip.String(),
-			TTL: int(ttl / time.Second),
-		})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			var (
+				ip  net.IP
+				ttl time.Duration
+				err error
+			)
+			if version == 4 {
+				ip, ttl, err = s.RequestIPv4(cid)
+			} else {
+				ip, ttl, err = s.RequestIPv6(cid)
+			}
+			if err != nil {
+				http.Error(w, err.Error(), getStatusCode(err))
+				return
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			err = json.NewEncoder(w).Encode(&struct {
+				IP  string `json:"ip"`
+				TTL int    `json:"ttl"`
+			}{
+				IP:  ip.String(),
+				TTL: int(ttl / time.Second),
+			})
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
-	})
+	}
+	mux.HandleFunc(prefix+"/ip/v4", ipHandler(4))
+	mux.HandleFunc(prefix+"/ip/v6", ipHandler(6))
 
 	mux.HandleFunc(prefix+"/tunnel/", func(w http.ResponseWriter, r *http.Request) {
 		if r.ProtoMajor != 2 {
@@ -400,11 +457,6 @@ func (s *Server) Handler(ctx context.Context, prefix string) http.Handler {
 		ip := net.ParseIP(argIP)
 		if ip == nil {
 			http.Error(w, "invalid ip address", http.StatusBadRequest)
-			return
-		}
-		ip = ip.To4()
-		if ip == nil {
-			http.Error(w, "ipv4 address required", http.StatusBadRequest)
 			return
 		}
 
