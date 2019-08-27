@@ -25,15 +25,15 @@ const (
 
 // Client ...
 type Client struct {
-	MTU         int
-	CID         string
-	Host        string
-	ResolveAddr string
-	TLSConfig   *tls.Config
-	URLPrefix   string
-	Auth        func(r *http.Request)
-	Logger      Logger
-	UseH2C      bool
+	MTU       int
+	CID       string
+	Host      string
+	Dial      func(network, addr string) (net.Conn, error)
+	TLSConfig *tls.Config
+	URLPrefix string
+	Auth      func(r *http.Request)
+	Logger    Logger
+	UseH2C    bool
 
 	mu              sync.Mutex
 	bufPool         sync.Pool
@@ -212,14 +212,6 @@ func (c *Client) newTransport(hc *httpClient) (ts http.RoundTripper) {
 				addr = resolvedAddr.String()
 				mu.Unlock()
 				locked = false
-			} else {
-				if c.ResolveAddr != "" {
-					addr, err = GetHostPortAddr(c.ResolveAddr, "443")
-					if err != nil {
-						mu.Unlock()
-						return nil, err
-					}
-				}
 			}
 			defer func() {
 				if locked {
@@ -227,7 +219,11 @@ func (c *Client) newTransport(hc *httpClient) (ts http.RoundTripper) {
 				}
 			}()
 
-			conn, err = net.Dial(network, addr)
+			dial := c.Dial
+			if dial == nil {
+				dial = net.Dial
+			}
+			conn, err = dial(network, addr)
 			if err != nil {
 				return nil, err
 			}

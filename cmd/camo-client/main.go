@@ -30,6 +30,8 @@ var camoDir = getCamoDir()
 var (
 	help        = flag.Bool("help", false, "help")
 	password    = flag.String("password", "", "Set a password. It is recommended to use the environment variable CAMO_PASSWORD to set the password.")
+	inet4       = flag.Bool("4", false, "resolve host name to IPv4 addresses only")
+	inet6       = flag.Bool("6", false, "resolve host name to IPv6 addresses only")
 	resolve     = flag.String("resolve", "", "provide a custom address for a specific host and port pair")
 	mtu         = flag.Int("mtu", camo.DefaultMTU, "mtu")
 	logLevel    = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
@@ -60,6 +62,10 @@ func init() {
 	host = flag.Arg(0)
 	if host == "" {
 		log.Fatal("missing host")
+	}
+
+	if *inet4 && *inet6 {
+		log.Fatal("can not use -4 and -6 at the same time")
 	}
 
 	if *resolve != "" {
@@ -93,13 +99,23 @@ func main() {
 	defer iface.Close()
 
 	c := &camo.Client{
-		MTU:         *mtu,
-		CID:         cid,
-		Host:        host,
-		ResolveAddr: *resolve,
-		Auth:        func(r *http.Request) { camo.SetAuth(r, *password) },
-		Logger:      log,
-		UseH2C:      *useH2C,
+		MTU:  *mtu,
+		CID:  cid,
+		Host: host,
+		Dial: func(network, addr string) (net.Conn, error) {
+			if *inet4 {
+				network = "tcp4"
+			} else if *inet6 {
+				network = "tcp6"
+			}
+			if *resolve != "" {
+				addr = *resolve
+			}
+			return net.Dial(network, addr)
+		},
+		Auth:   func(r *http.Request) { camo.SetAuth(r, *password) },
+		Logger: log,
+		UseH2C: *useH2C,
 	}
 
 	expvar.Publish("camo", c.Metrics())
