@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"expvar"
 	"flag"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -40,9 +42,10 @@ var (
 )
 
 var (
-	log  *camo.LevelLogger
-	host string
-	cid  string
+	log        *camo.LevelLogger
+	host       string
+	cid        string
+	remoteAddr atomic.Value
 )
 
 func init() {
@@ -110,7 +113,11 @@ func main() {
 			if *resolve != "" {
 				addr = *resolve
 			}
-			return net.Dial(network, addr)
+			conn, err := net.Dial(network, addr)
+			if err == nil {
+				remoteAddr.Store(conn.RemoteAddr())
+			}
+			return conn, err
 		},
 		Auth:   func(r *http.Request) { camo.SetAuth(r, *password) },
 		Logger: log,
@@ -191,8 +198,8 @@ func ensureCID(host string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP, net.Addr) (reset func(), err error) {
-	return func(tunIP net.IP, remoteAddr net.Addr) (reset func(), err error) {
+func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP) (func(), error) {
+	return func(tunIP net.IP) (reset func(), err error) {
 		var rollback camo.Rollback
 		defer func() {
 			if err != nil {
@@ -221,9 +228,15 @@ func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP, net.Addr) (
 		}
 		log.Infof("%s(%s) up", iface.Name(), cidr)
 
-		srvIP, _, err := net.SplitHostPort(remoteAddr.String())
+		// bypass tun for server ip
+
+		srvAddr, _ := remoteAddr.Load().(net.Addr)
+		if srvAddr == nil {
+			return nil, errors.New("failed to get server address")
+		}
+		srvIP, _, err := net.SplitHostPort(srvAddr.String())
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to get server ip: %v (%s)", err, srvAddr)
 		}
 		srvIPVer := 4
 		if !camo.IsIPv4(srvIP) {
@@ -273,7 +286,7 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 
 		log.Infof("client get ip (%s) ttl (%d)", ip, ttl)
 
-		tunnel, remoteAddr, err := c.OpenTunnel(ctx, ip)
+		tunnel, err := c.OpenTunnel(ctx, ip)
 		if err != nil {
 			cancel()
 			return nil, err
@@ -281,7 +294,7 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 
 		cancel()
 
-		reset, err := setupTunHandler(c, iface)(ip, remoteAddr)
+		reset, err := setupTunHandler(c, iface)(ip)
 		if err != nil {
 			tunnel(ctx) // use a canceled ctx to terminate the tunnel
 			return nil, fmt.Errorf("setup tunnel error: %v", err)

@@ -40,7 +40,7 @@ type Client struct {
 	ifaceWriteChan  chan []byte
 	tunnelWriteChan chan []byte
 
-	hc *httpClient
+	hc *http.Client
 
 	metrics     *Metrics
 	metricsOnce sync.Once
@@ -194,12 +194,7 @@ func (c *Client) serveTunnel(ctx context.Context, rw io.ReadWriteCloser, localIP
 	}, c.getTunnelWriteChan(), postWrite)
 }
 
-type httpClient struct {
-	http.Client
-	remoteAddr net.Addr
-}
-
-func (c *Client) newTransport(hc *httpClient) (ts http.RoundTripper) {
+func (c *Client) newTransport() (ts http.RoundTripper) {
 	var (
 		mu           sync.Mutex
 		resolvedAddr net.Addr
@@ -232,8 +227,6 @@ func (c *Client) newTransport(hc *httpClient) (ts http.RoundTripper) {
 				resolvedAddr = conn.RemoteAddr()
 				mu.Unlock()
 				locked = false
-
-				hc.remoteAddr = resolvedAddr
 			}
 
 			if !c.UseH2C {
@@ -263,14 +256,15 @@ func (c *Client) newTransport(hc *httpClient) (ts http.RoundTripper) {
 	}
 }
 
-func (c *Client) httpClient() *httpClient {
+func (c *Client) httpClient() *http.Client {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.hc != nil {
 		return c.hc
 	}
-	c.hc = new(httpClient)
-	c.hc.Transport = c.newTransport(c.hc)
+	c.hc = &http.Client{
+		Transport: c.newTransport(),
+	}
 	return c.hc
 }
 
@@ -314,10 +308,6 @@ func (e *ClientAPIError) Temporary() bool {
 	return e.temp
 }
 
-type contextKey int
-
-var keyGetClientRemoteAddr contextKey
-
 func (c *Client) doReq(req *http.Request) (*http.Response, error) {
 	c.setAuth(req)
 
@@ -343,10 +333,6 @@ func (c *Client) doReq(req *http.Request) (*http.Response, error) {
 			Err:  &statusError{res.StatusCode, string(msg)},
 			temp: isStatusRetryable(res.StatusCode),
 		}
-	}
-
-	if pAddr, ok := req.Context().Value(keyGetClientRemoteAddr).(*net.Addr); ok {
-		*pAddr = hc.remoteAddr
 	}
 
 	return res, nil
@@ -413,7 +399,7 @@ func (s *httpClientStream) Close() error {
 }
 
 // OpenTunnel ...
-func (c *Client) OpenTunnel(ctx context.Context, ip net.IP) (tunnel func(context.Context) error, remoteAddr net.Addr, err error) {
+func (c *Client) OpenTunnel(ctx context.Context, ip net.IP) (tunnel func(context.Context) error, err error) {
 	r, w := io.Pipe()
 	req := &http.Request{
 		Method: "POST",
@@ -424,12 +410,12 @@ func (c *Client) OpenTunnel(ctx context.Context, ip net.IP) (tunnel func(context
 		Body: ioutil.NopCloser(r),
 	}
 	// TODO 这里不能直接使用 ctx 作为 req 的 Context, 我们需要保持 req.Body 和 res.Body 组成的双向流
-	res, err := c.doReq(req.WithContext(context.WithValue(context.TODO(), keyGetClientRemoteAddr, &remoteAddr)))
+	res, err := c.doReq(req.WithContext(context.TODO()))
 	if err != nil {
 		w.Close()
 		return
 	}
 	return func(ctx context.Context) error {
 		return c.serveTunnel(ctx, &httpClientStream{res.Body, w}, ip)
-	}, remoteAddr, nil
+	}, nil
 }
