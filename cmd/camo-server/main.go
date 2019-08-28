@@ -250,7 +250,7 @@ func initTLSConfig() *tls.Config {
 
 func withLog(log camo.Logger, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Debug(r.Method, r.URL.String(), r.Proto, r.Header)
+		log.Info(r.Method, r.URL.String(), r.Proto, r.Header)
 		h.ServeHTTP(w, r)
 	})
 }
