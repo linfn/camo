@@ -177,7 +177,7 @@ func initTun(defers *camo.RollBack) *camo.Iface {
 	}
 	if *tunIPv6 != "" {
 		if err := iface.SetIPv6(*tunIPv6); err != nil {
-			log.Panicf("failed to set %s IPv4 address %s: %v", iface.Name(), *tunIPv6, err)
+			log.Panicf("failed to set %s IPv6 address %s: %v", iface.Name(), *tunIPv6, err)
 		}
 		log.Infof("set %s IPv6 address at %s", iface.Name(), *tunIPv6)
 	}

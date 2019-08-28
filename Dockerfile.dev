@@ -3,13 +3,15 @@ FROM golang
 ARG USE_CN_APT_SOURCES
 RUN [ -z "$USE_CN_APT_SOURCES" ] || sed -r -i 's/(deb|security).debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list
 
-RUN apt-get update && apt-get install -y iproute2 iptables
+RUN apt-get update && apt-get install -y iproute2 iptables ip6tables
 
 WORKDIR /camo
 
 ENV CAMO_PASSWORD=
 ENV CAMO_HOST=
 ENV CAMO_LOG_LEVEL=debug
+ENV CAMO_IP4=10.20.0.1/24
+ENV CAMO_IP6=
 
 EXPOSE 443
 
