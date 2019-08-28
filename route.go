@@ -12,7 +12,7 @@ import (
 // GetRoute ...
 func GetRoute(dst string) (gateway string, dev string, err error) {
 	switch runtime.GOOS {
-	case "darwin":
+	case "darwin", "freebsd":
 		return getRouteBSD(dst)
 	default:
 		return getRouteIPRoute2(dst)
@@ -22,7 +22,7 @@ func GetRoute(dst string) (gateway string, dev string, err error) {
 // AddRoute ...
 func AddRoute(dst string, gateway string, dev string) error {
 	switch runtime.GOOS {
-	case "darwin":
+	case "darwin", "freebsd":
 		return addRouteBSD(dst, gateway, dev)
 	default:
 		return addRouteIPRoute2(dst, gateway, dev)
@@ -32,7 +32,7 @@ func AddRoute(dst string, gateway string, dev string) error {
 // DelRoute ...
 func DelRoute(dst string, gateway string, dev string) error {
 	switch runtime.GOOS {
-	case "darwin":
+	case "darwin", "freebsd":
 		return delRouteBSD(dst, gateway, dev)
 	default:
 		return delRouteIPRoute2(dst, gateway, dev)
@@ -46,7 +46,6 @@ func getRouteIPRoute2(dst string) (gateway string, dev string, err error) {
 	}
 	b, err := runCmdOutput("ip", family, "route", "get", dst)
 	if err != nil {
-		err = fmt.Errorf("ip route get %s error: %v", dst, err)
 		return
 	}
 	_, line, err := bufio.ScanLines(b, false)
@@ -92,11 +91,7 @@ func addRouteIPRoute2(dst string, gateway string, dev string) error {
 	if dev != "" {
 		args = append(args, "dev", dev)
 	}
-	err := runCmd("ip", args...)
-	if err != nil {
-		err = fmt.Errorf("ip %s error: %v", strings.Join(args, " "), err)
-	}
-	return err
+	return runCmd("ip", args...)
 }
 
 func delRouteIPRoute2(dst string, gateway string, dev string) error {
@@ -111,11 +106,7 @@ func delRouteIPRoute2(dst string, gateway string, dev string) error {
 	if dev != "" {
 		args = append(args, "dev", dev)
 	}
-	err := runCmd("ip", args...)
-	if err != nil {
-		err = fmt.Errorf("ip %s error: %v", strings.Join(args, " "), err)
-	}
-	return err
+	return runCmd("ip", args...)
 }
 
 func getRouteBSD(dst string) (gateway string, dev string, err error) {
@@ -125,7 +116,6 @@ func getRouteBSD(dst string) (gateway string, dev string, err error) {
 	}
 	b, err := runCmdOutput("route", "-n", "get", family, dst)
 	if err != nil {
-		err = fmt.Errorf("route get %s error: %v", dst, err)
 		return
 	}
 
@@ -163,11 +153,7 @@ func addRouteBSD(dst string, gateway string, _ string) error {
 	if !IsIPv4(dst) {
 		family = "-inet6"
 	}
-	err := runCmd("route", "-n", "add", "-net", family, dst, gateway)
-	if err != nil {
-		return fmt.Errorf("route add %s %s error: %v", dst, gateway, err)
-	}
-	return nil
+	return runCmd("route", "-n", "add", "-net", family, dst, gateway)
 }
 
 func delRouteBSD(dst string, gateway string, _ string) error {
@@ -175,11 +161,7 @@ func delRouteBSD(dst string, gateway string, _ string) error {
 	if !IsIPv4(dst) {
 		family = "-inet6"
 	}
-	err := runCmd("route", "-n", "delete", "-net", family, dst, gateway)
-	if err != nil {
-		return fmt.Errorf("route del %s %s error: %v", dst, gateway, err)
-	}
-	return nil
+	return runCmd("route", "-n", "delete", "-net", family, dst, gateway)
 }
 
 // SetupNAT ...
@@ -190,7 +172,7 @@ func SetupNAT(src string) (cancel func(), err error) {
 	}
 	err = runCmd(cmd, "-t", "nat", "-A", "POSTROUTING", "-s", src, "-j", "MASQUERADE")
 	if err != nil {
-		return nil, fmt.Errorf("iptables error: %v", err)
+		return nil, err
 	}
 	return func() {
 		runCmd(cmd, "-t", "nat", "-D", "POSTROUTING", "-s", src, "-j", "MASQUERADE")
@@ -199,7 +181,7 @@ func SetupNAT(src string) (cancel func(), err error) {
 
 // RedirectGateway 参考 https://www.tinc-vpn.org/examples/redirect-gateway/
 func RedirectGateway(dev string, gateway string) (reset func(), err error) {
-	var rollback RollBack
+	var rollback Rollback
 	defer func() {
 		if err != nil {
 			rollback.Do()

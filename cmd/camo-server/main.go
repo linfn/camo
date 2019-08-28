@@ -84,7 +84,7 @@ func main() {
 		return
 	}
 
-	var defers camo.RollBack
+	var defers camo.Rollback
 	defer defers.Do()
 
 	iface := initTun(&defers)
@@ -157,7 +157,7 @@ func initLog() {
 	log = camo.NewLogger(stdlog.New(os.Stderr, "", stdlog.LstdFlags|stdlog.Llongfile), logLevel)
 }
 
-func initTun(defers *camo.RollBack) *camo.Iface {
+func initTun(defers *camo.Rollback) *camo.Iface {
 	iface, err := camo.NewTun(*mtu)
 	if err != nil {
 		log.Panicf("failed to create tun device: %v", err)

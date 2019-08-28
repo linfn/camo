@@ -193,7 +193,7 @@ func ensureCID(host string) string {
 
 func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP, net.Addr) (reset func(), err error) {
 	return func(tunIP net.IP, remoteAddr net.Addr) (reset func(), err error) {
-		var rollback camo.RollBack
+		var rollback camo.Rollback
 		defer func() {
 			if err != nil {
 				rollback.Do()

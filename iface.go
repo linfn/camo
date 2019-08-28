@@ -13,7 +13,6 @@ import (
 // Iface ...
 type Iface struct {
 	*water.Interface
-	mtu int
 
 	ipv4    net.IP
 	subnet4 *net.IPNet
@@ -98,7 +97,7 @@ func (i *Iface) delIPv4() error {
 	if i.ipv4 == nil {
 		return nil
 	}
-	err := delIfaceAddr(i.Name(), toCIDR(i.ipv4, i.subnet4.Mask))
+	err := delIfaceAddr(i.Name(), ToCIDR(i.ipv4, i.subnet4.Mask))
 	if err != nil {
 		return err
 	}
@@ -111,7 +110,7 @@ func (i *Iface) delIPv6() error {
 	if i.ipv6 == nil {
 		return nil
 	}
-	err := delIfaceAddr(i.Name(), toCIDR(i.ipv6, i.subnet6.Mask))
+	err := delIfaceAddr(i.Name(), ToCIDR(i.ipv6, i.subnet6.Mask))
 	if err != nil {
 		return err
 	}
@@ -122,12 +121,12 @@ func (i *Iface) delIPv6() error {
 
 // CIDR4 ...
 func (i *Iface) CIDR4() string {
-	return toCIDR(i.ipv4, i.subnet4.Mask)
+	return ToCIDR(i.ipv4, i.subnet4.Mask)
 }
 
 // CIDR6 ...
 func (i *Iface) CIDR6() string {
-	return toCIDR(i.ipv6, i.subnet6.Mask)
+	return ToCIDR(i.ipv6, i.subnet6.Mask)
 }
 
 // IPv4 ...
@@ -160,7 +159,7 @@ func (i *Iface) Close() error {
 
 func setIfaceUp(dev string, mtu int) error {
 	switch runtime.GOOS {
-	case "darwin":
+	case "darwin", "freebsd":
 		return setIfaceUpBSD(dev, mtu)
 	default:
 		return setIfaceUpIPRoute2(dev, mtu)
@@ -169,7 +168,7 @@ func setIfaceUp(dev string, mtu int) error {
 
 func addIfaceAddr(dev string, cidr string) error {
 	switch runtime.GOOS {
-	case "darwin":
+	case "darwin", "freebsd":
 		return addIfaceAddrBSD(dev, cidr)
 	default:
 		return addIfaceAddrIPRoute2(dev, cidr)
@@ -178,7 +177,7 @@ func addIfaceAddr(dev string, cidr string) error {
 
 func delIfaceAddr(dev string, cidr string) error {
 	switch runtime.GOOS {
-	case "darwin":
+	case "darwin", "freebsd":
 		return delIfaceAddrBSD(dev, cidr)
 	default:
 		return delIfaceAddrIPRoute2(dev, cidr)

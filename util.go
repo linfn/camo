@@ -7,36 +7,42 @@ import (
 	"strings"
 )
 
-func runCmd(name string, arg ...string) error {
-	err := exec.Command(name, arg...).Run()
-	if err != nil {
-		if e, ok := err.(*exec.ExitError); ok && len(e.Stderr) > 0 {
-			return fmt.Errorf("%v: %s", e, string(e.Stderr))
-		}
+func cmdError(err error, name string, args []string) error {
+	var emsg string
+	if e, ok := err.(*exec.ExitError); ok && len(e.Stderr) > 0 {
+		emsg = strings.TrimSpace(string(e.Stderr))
+	} else {
+		emsg = err.Error()
 	}
-	return err
+	return fmt.Errorf("%s. cmdline: %s %s", emsg, name, strings.Join(args, " "))
+}
+
+func runCmd(name string, arg ...string) error {
+	_, err := exec.Command(name, arg...).Output()
+	if err != nil {
+		return cmdError(err, name, arg)
+	}
+	return nil
 }
 
 func runCmdOutput(name string, arg ...string) ([]byte, error) {
 	out, err := exec.Command(name, arg...).Output()
 	if err != nil {
-		if e, ok := err.(*exec.ExitError); ok && len(e.Stderr) > 0 {
-			return out, fmt.Errorf("%v: %s", e, string(e.Stderr))
-		}
+		return nil, cmdError(err, name, arg)
 	}
-	return out, err
+	return out, nil
 }
 
-// RollBack ...
-type RollBack []func()
+// Rollback ...
+type Rollback []func()
 
 // Add ...
-func (r *RollBack) Add(f func()) {
+func (r *Rollback) Add(f func()) {
 	*r = append(*r, f)
 }
 
 // Do ...
-func (r RollBack) Do() {
+func (r Rollback) Do() {
 	for i := len(r) - 1; i >= 0; i-- {
 		r[i]()
 	}
@@ -71,7 +77,8 @@ func IsIPv4(ip string) bool {
 	return netIP.To4() != nil
 }
 
-func toCIDR(ip net.IP, mask net.IPMask) string {
+// ToCIDR ...
+func ToCIDR(ip net.IP, mask net.IPMask) string {
 	ones, _ := mask.Size()
 	return fmt.Sprintf("%s/%d", ip, ones)
 }
