@@ -28,16 +28,15 @@ import (
 var camoDir = getCamoDir()
 
 var (
-	help        = flag.Bool("help", false, "help")
-	password    = flag.String("password", "", "Set a password. It is recommended to use the environment variable CAMO_PASSWORD to set the password.")
-	inet4       = flag.Bool("4", false, "resolve host name to IPv4 addresses only")
-	inet6       = flag.Bool("6", false, "resolve host name to IPv6 addresses only")
-	resolve     = flag.String("resolve", "", "provide a custom address for a specific host and port pair")
-	mtu         = flag.Int("mtu", camo.DefaultMTU, "mtu")
-	logLevel    = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
-	useH2C      = flag.Bool("h2c", false, "use h2c (for debug)")
-	debug       = flag.Bool("debug", false, "enable metric and pprof")
-	debugListen = flag.String("debug-listen", "localhost:6060", "debug http server listen address")
+	help      = flag.Bool("help", false, "help")
+	password  = flag.String("password", "", "Set a password. It is recommended to use the environment variable CAMO_PASSWORD to set the password.")
+	inet4     = flag.Bool("4", false, "resolve host name to IPv4 addresses only")
+	inet6     = flag.Bool("6", false, "resolve host name to IPv6 addresses only")
+	resolve   = flag.String("resolve", "", "provide a custom address for a specific host and port pair")
+	mtu       = flag.Int("mtu", camo.DefaultMTU, "mtu")
+	logLevel  = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
+	useH2C    = flag.Bool("h2c", false, "use h2c (for debug)")
+	debugHTTP = flag.String("debug-http", "", "debug http server listen address")
 )
 
 var (
@@ -129,7 +128,7 @@ func main() {
 		cancel()
 	}()
 
-	if *debug {
+	if *debugHTTP != "" {
 		go debugHTTPServer()
 	}
 
@@ -302,7 +301,7 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 				break
 			}
 			if err != nil {
-				log.Errorf("failed to open tunnel: %v", err)
+				log.Errorf("failed to open IPv%d tunnel: %v", ipVersion, err)
 				if ae, ok := err.(*camo.ClientAPIError); ok {
 					if !firstRound || ae.Temporary() {
 						goto RETRY
@@ -375,7 +374,7 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 }
 
 func debugHTTPServer() {
-	err := http.ListenAndServe(*debugListen, nil)
+	err := http.ListenAndServe(*debugHTTP, nil)
 	if err != http.ErrServerClosed {
 		log.Errorf("debug http server exited: %v", err)
 	}

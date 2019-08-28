@@ -25,11 +25,11 @@ var defaultCertDir = getCamoDir() + "/certs"
 
 var (
 	help          = flag.Bool("help", false, "help")
-	addr          = flag.String("listen", ":443", "listen address")
+	listenAddr    = flag.String("listen", ":443", "listen address")
 	password      = flag.String("password", "", "Set a password. It is recommended to use the environment variable CAMO_PASSWORD to set the password.")
 	mtu           = flag.Int("mtu", camo.DefaultMTU, "tun mtu")
-	tunIPv4       = flag.String("ip4", "", "tun ipv4 cidr")
-	tunIPv6       = flag.String("ip6", "", "tun ipv6 cidr")
+	tunIPv4       = flag.String("tun-ip4", "", "tun ipv4 cidr")
+	tunIPv6       = flag.String("tun-ip6", "", "tun ipv6 cidr")
 	enableNAT4    = flag.Bool("nat4", false, "enable NAT for IPv4")
 	enableNAT6    = flag.Bool("nat6", false, "enable NAT for IPv6")
 	autocertHost  = flag.String("autocert-host", "", "hostname")
@@ -37,7 +37,6 @@ var (
 	autocertEmail = flag.String("autocert-email", "", "(optional) email address")
 	logLevel      = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
 	useH2C        = flag.Bool("h2c", false, "use h2c (for debug)")
-	enablePProf   = flag.Bool("pprof", false, "enable pprof")
 )
 
 var (
@@ -60,16 +59,16 @@ func init() {
 	}
 
 	if *tunIPv4 == "" && *tunIPv6 == "" {
-		log.Fatal("missing ip4 and ip6 config")
+		log.Fatal("missing --tun-ip4 and --tun-ip6 config")
 	} else {
 		if *tunIPv4 != "" {
 			if _, _, err := net.ParseCIDR(*tunIPv4); err != nil {
-				log.Fatalf("invalid IPv4 cidr: %v", err)
+				log.Fatalf("invalid --tun-ip4 cidr: %v", err)
 			}
 		}
 		if *tunIPv6 != "" {
 			if _, _, err := net.ParseCIDR(*tunIPv6); err != nil {
-				log.Fatalf("invalid IPv6 cidr: %v", err)
+				log.Fatalf("invalid --tun-ip6 cidr: %v", err)
 			}
 		}
 	}
@@ -97,9 +96,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/", withLog(log, srv.Handler(ctx, "")))
 	mux.Handle("/debug/vars", expvar.Handler())
-	if *enablePProf {
-		handlePProf(mux)
-	}
+	handlePProf(mux)
 
 	hsrv := initHTTPServer(camo.WithAuth(mux, *password, log))
 
@@ -231,7 +228,7 @@ func initIPPool(srv *camo.Server) {
 }
 
 func initHTTPServer(handler http.Handler) *http.Server {
-	hsrv := &http.Server{Addr: *addr}
+	hsrv := &http.Server{Addr: *listenAddr}
 	if *useH2C {
 		hsrv.Handler = h2c.NewHandler(handler, &http2.Server{})
 	} else {
