@@ -73,7 +73,7 @@ func init() {
 	if *resolve != "" {
 		addr, err := camo.GetHostPortAddr(*resolve, "443")
 		if err != nil {
-			log.Fatal("resolve addr %s error: %v", *resolve, err)
+			log.Fatalf("resolve addr %s error: %v", *resolve, err)
 		}
 		*resolve = addr
 	}

@@ -49,6 +49,8 @@ type Server struct {
 
 	metrics     *Metrics
 	metricsOnce sync.Once
+
+	testSessionRemoveHook func(ss *session)
 }
 
 func (s *Server) getIfaceWriteChan() chan []byte {
@@ -269,6 +271,9 @@ func (s *Server) removeSession(ip net.IP) {
 			default:
 				break LOOP
 			}
+		}
+		if s.testSessionRemoveHook != nil {
+			s.testSessionRemoveHook(ss)
 		}
 	} else {
 		s.mu.Unlock()

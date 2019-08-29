@@ -2,3 +2,4 @@ camo-client
 camo-server
 .env
 .certs
+*coverage.txt

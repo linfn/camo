@@ -8,6 +8,11 @@ server:
 client:
 	go build ./cmd/camo-client
 
+.PHONY: test
+test:
+	go test -race -coverprofile=coverage.txt ./...
+
+
 DEV_CONTAINER_NAME=camo-dev
 DOCKER_NETWORK=bridge
 

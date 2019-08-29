@@ -18,10 +18,10 @@ func TestSubnetIPPool(t *testing.T) {
 		ips[ip.String()] = ip
 	}
 	if len(ips) != 253 {
-		t.Fail()
+		t.Error()
 	}
 	if _, ok := ips["10.20.0.10"]; ok {
-		t.Fail()
+		t.Error()
 	}
 
 	for _, v := range ips {
@@ -36,11 +36,11 @@ func TestSubnetIPPool(t *testing.T) {
 		ips[ip.String()] = ip
 	}
 	if len(ips) != 253 {
-		t.Fail()
+		t.Error()
 	}
 
 	if ippool.Use(net.ParseIP("10.30.0.10"), "") {
-		t.Fail()
+		t.Error()
 	}
 	ippool.Free(net.ParseIP("10.30.0.10"))
 }

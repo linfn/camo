@@ -151,19 +151,14 @@ func (b IPv6Header) String() string {
 	return fmt.Sprintf("ver=%d tclass=%#x flowlbl=%#x payloadlen=%d nxthdr=%d hoplim=%d src=%v dst=%v", b.Version(), b.TrafficClass(), b.FlowLabel(), b.PayloadLen(), b.NextHeader(), b.HopLimit(), b.Src(), b.Dst())
 }
 
-var (
-	errBadPacketRead = errors.New("bad packet read")
-)
+var errBadPacketRead = errors.New("bad packet read")
 
-type packetIO struct {
-	rw io.ReadWriteCloser
-}
-
-func (p *packetIO) Read(b []byte) (int, error) {
+// ReadIPPacket reads a IPv4/IPv6 packet from the io.Reader
+func ReadIPPacket(r io.Reader, b []byte) (int, error) {
 	if len(b) < IPv4HeaderLen {
 		return 0, io.ErrShortBuffer
 	}
-	n, err := io.ReadFull(p.rw, b[:IPv4HeaderLen])
+	n, err := io.ReadFull(r, b[:IPv4HeaderLen])
 	if err != nil {
 		return 0, err
 	}
@@ -183,11 +178,19 @@ func (p *packetIO) Read(b []byte) (int, error) {
 	if totalLen > len(b) {
 		return 0, io.ErrShortBuffer
 	}
-	_, err = io.ReadFull(p.rw, b[n:totalLen])
+	_, err = io.ReadFull(r, b[n:totalLen])
 	if err != nil {
 		return 0, err
 	}
 	return totalLen, nil
+}
+
+type packetIO struct {
+	rw io.ReadWriteCloser
+}
+
+func (p *packetIO) Read(b []byte) (int, error) {
+	return ReadIPPacket(p.rw, b)
 }
 
 func (p *packetIO) Write(b []byte) (int, error) {
