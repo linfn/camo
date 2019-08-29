@@ -198,8 +198,8 @@ func ensureCID(host string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP) (func(), error) {
-	return func(tunIP net.IP) (reset func(), err error) {
+func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP, net.IPMask) (func(), error) {
+	return func(tunIP net.IP, mask net.IPMask) (reset func(), err error) {
 		var rollback camo.Rollback
 		defer func() {
 			if err != nil {
@@ -208,19 +208,17 @@ func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP) (func(), er
 		}()
 
 		var (
-			cidr     string
+			cidr     = camo.ToCIDR(tunIP, mask)
 			tunIPVer int
 		)
 		if tunIP.To4() != nil {
 			tunIPVer = 4
-			cidr = tunIP.String() + "/32"
 			if err = iface.SetIPv4(cidr); err != nil {
 				return nil, err
 			}
 			rollback.Add(func() { iface.SetIPv4("") })
 		} else {
 			tunIPVer = 6
-			cidr = tunIP.String() + "/128"
 			if err = iface.SetIPv6(cidr); err != nil {
 				return nil, err
 			}
@@ -271,20 +269,21 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 
 		var (
-			ip  net.IP
-			ttl time.Duration
+			ip   net.IP
+			mask net.IPMask
+			ttl  time.Duration
 		)
 		if ipVersion == 4 {
-			ip, ttl, err = c.RequestIPv4(ctx)
+			ip, mask, ttl, err = c.RequestIPv4(ctx)
 		} else {
-			ip, ttl, err = c.RequestIPv6(ctx)
+			ip, mask, ttl, err = c.RequestIPv6(ctx)
 		}
 		if err != nil {
 			cancel()
 			return nil, err
 		}
 
-		log.Infof("client get ip (%s) ttl (%d)", ip, ttl)
+		log.Infof("client get ip (%s) ttl (%d)", camo.ToCIDR(ip, mask), ttl)
 
 		tunnel, err := c.OpenTunnel(ctx, ip)
 		if err != nil {
@@ -294,7 +293,7 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 
 		cancel()
 
-		reset, err := setupTunHandler(c, iface)(ip)
+		reset, err := setupTunHandler(c, iface)(ip, mask)
 		if err != nil {
 			tunnel(ctx) // use a canceled ctx to terminate the tunnel
 			return nil, fmt.Errorf("setup tunnel error: %v", err)

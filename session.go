@@ -9,6 +9,7 @@ import (
 type session struct {
 	cid        string
 	ip         net.IP
+	mask       net.IPMask
 	writeChan  chan []byte
 	createTime time.Time
 

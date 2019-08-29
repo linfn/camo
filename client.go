@@ -338,7 +338,7 @@ func (c *Client) doReq(req *http.Request) (*http.Response, error) {
 	return res, nil
 }
 
-func (c *Client) requestIP(ctx context.Context, ipVersion int) (ip net.IP, ttl time.Duration, err error) {
+func (c *Client) requestIP(ctx context.Context, ipVersion int) (ip net.IP, mask net.IPMask, ttl time.Duration, err error) {
 	req := &http.Request{
 		Method: "POST",
 		URL:    c.url("/ip/v" + strconv.Itoa(ipVersion)),
@@ -353,8 +353,9 @@ func (c *Client) requestIP(ctx context.Context, ipVersion int) (ip net.IP, ttl t
 	defer res.Body.Close()
 
 	var result struct {
-		IP  string `json:"ip"`
-		TTL int    `json:"ttl"`
+		IP       string `json:"ip"`
+		Notation int    `json:"notation"`
+		TTL      int    `json:"ttl"`
 	}
 	err = json.NewDecoder(res.Body).Decode(&result)
 	if err != nil {
@@ -370,17 +371,30 @@ func (c *Client) requestIP(ctx context.Context, ipVersion int) (ip net.IP, ttl t
 		err = &ClientAPIError{Err: fmt.Errorf("failed to decode ip (%s)", result.IP), temp: false}
 		return
 	}
+	if ip.To4() != nil {
+		if result.Notation > 0 && result.Notation <= 32 {
+			mask = net.CIDRMask(result.Notation, 32)
+		} else {
+			mask = net.CIDRMask(32, 32)
+		}
+	} else {
+		if result.Notation > 0 && result.Notation <= 128 {
+			mask = net.CIDRMask(result.Notation, 128)
+		} else {
+			mask = net.CIDRMask(128, 128)
+		}
+	}
 
-	return ip, time.Duration(result.TTL) * time.Second, nil
+	return ip, mask, time.Duration(result.TTL) * time.Second, nil
 }
 
 // RequestIPv4 ...
-func (c *Client) RequestIPv4(ctx context.Context) (ip net.IP, ttl time.Duration, err error) {
+func (c *Client) RequestIPv4(ctx context.Context) (ip net.IP, mask net.IPMask, ttl time.Duration, err error) {
 	return c.requestIP(ctx, 4)
 }
 
 // RequestIPv6 ...
-func (c *Client) RequestIPv6(ctx context.Context) (ip net.IP, ttl time.Duration, err error) {
+func (c *Client) RequestIPv6(ctx context.Context) (ip net.IP, mask net.IPMask, ttl time.Duration, err error) {
 	return c.requestIP(ctx, 6)
 }
 

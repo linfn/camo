@@ -31,23 +31,27 @@ func TestServer_RequestIP(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		reqIP      func(cid string) (ip net.IP, ttl time.Duration, err error)
+		reqIP      func(cid string) (ip net.IP, mask net.IPMask, ttl time.Duration, err error)
 		checkIPVer func(ip net.IP) bool
+		mask       net.IPMask
 	}{
-		{"v4", srv.RequestIPv4, checkIsIPv4},
-		{"v6", srv.RequestIPv6, checkIsIPv6},
+		{"v4", srv.RequestIPv4, checkIsIPv4, net.CIDRMask(24, 32)},
+		{"v6", srv.RequestIPv6, checkIsIPv6, net.CIDRMask(64, 128)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ip1, _, err := tt.reqIP("camo1")
+			ip1, mask1, _, err := tt.reqIP("camo1")
 			if err != nil {
 				t.Fatal(err)
 			}
 			if !tt.checkIPVer(ip1) {
 				t.Fatal("wrong ip version")
 			}
+			if mask1.String() != tt.mask.String() {
+				t.Fatal("wrong ip mask")
+			}
 
-			ip11, _, err := tt.reqIP("camo1")
+			ip11, _, _, err := tt.reqIP("camo1")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -55,7 +59,7 @@ func TestServer_RequestIP(t *testing.T) {
 				t.Error("Assign the different IP addresses to the same client")
 			}
 
-			ip2, _, err := tt.reqIP("camo2")
+			ip2, _, _, err := tt.reqIP("camo2")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -152,7 +156,7 @@ func TestServer_OpenTunnel(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		reqIP       func(cid string) (ip net.IP, ttl time.Duration, err error)
+		reqIP       func(cid string) (ip net.IP, mask net.IPMask, ttl time.Duration, err error)
 		specifiedIP net.IP
 		pkt         func(src net.IP) []byte
 	}{
@@ -161,7 +165,7 @@ func TestServer_OpenTunnel(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ip1, _, err := tt.reqIP("camo1")
+			ip1, _, _, err := tt.reqIP("camo1")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -241,14 +245,14 @@ func TestServer_SessionTTL(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		reqIP func(cid string) (ip net.IP, ttl time.Duration, err error)
+		reqIP func(cid string) (ip net.IP, mask net.IPMask, ttl time.Duration, err error)
 	}{
 		{"v4", srv.RequestIPv4},
 		{"v6", srv.RequestIPv6},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, err := tt.reqIP("camo1")
+			_, _, _, err := tt.reqIP("camo1")
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -171,7 +171,7 @@ func ipSessionKey(ip net.IP) string {
 	return string(ip)
 }
 
-func (s *Server) createSessionLocked(ip net.IP, cid string) *session {
+func (s *Server) createSessionLocked(ip net.IP, mask net.IPMask, cid string) *session {
 	if s.ipSession == nil {
 		s.ipSession = make(map[string]*session)
 		s.cidIPv4Session = make(map[string]*session)
@@ -183,6 +183,7 @@ func (s *Server) createSessionLocked(ip net.IP, cid string) *session {
 	ss := &session{
 		cid:        cid,
 		ip:         ip,
+		mask:       mask,
 		createTime: time.Now(),
 		writeChan:  make(chan []byte, defaultServerTunnelWriteChanLen),
 	}
@@ -241,11 +242,12 @@ func (s *Server) getOrCreateSession(ip net.IP, cid string) (*session, error) {
 	if ippool == nil {
 		return nil, ErrNoIPConfig
 	}
-	if !ippool.Use(ip, cid) {
+	ipmask, ok := ippool.Use(ip, cid)
+	if !ok {
 		return nil, ErrInvalidIP
 	}
 
-	return s.createSessionLocked(ip, cid), nil
+	return s.createSessionLocked(ip, ipmask, cid), nil
 }
 
 func (s *Server) removeSession(ip net.IP) {
@@ -280,7 +282,7 @@ func (s *Server) removeSession(ip net.IP) {
 	}
 }
 
-func (s *Server) assignIPLocked(cid string, cidSession map[string]*session, ipPool IPPool) (ip net.IP, ttl time.Duration, err error) {
+func (s *Server) assignIPLocked(cid string, cidSession map[string]*session, ipPool IPPool) (ip net.IP, mask net.IPMask, ttl time.Duration, err error) {
 	getTTL := func(ttl time.Duration, idle time.Duration) time.Duration {
 		d := ttl - idle
 		if d < 0 {
@@ -291,7 +293,7 @@ func (s *Server) assignIPLocked(cid string, cidSession map[string]*session, ipPo
 
 	ss, ok := cidSession[cid]
 	if ok {
-		return ss.ip, getTTL(s.sessionTTL(), ss.idleDuration()), nil
+		return ss.ip, ss.mask, getTTL(s.sessionTTL(), ss.idleDuration()), nil
 	}
 
 	if ipPool == nil {
@@ -299,25 +301,25 @@ func (s *Server) assignIPLocked(cid string, cidSession map[string]*session, ipPo
 		return
 	}
 
-	ip, ok = ipPool.Get(cid)
+	ip, mask, ok = ipPool.Get(cid)
 	if !ok {
 		err = ErrUnableAssignIP
 		return
 	}
 
-	s.createSessionLocked(ip, cid)
-	return ip, s.sessionTTL(), nil
+	s.createSessionLocked(ip, mask, cid)
+	return ip, mask, s.sessionTTL(), nil
 }
 
 // RequestIPv4 ...
-func (s *Server) RequestIPv4(cid string) (ip net.IP, ttl time.Duration, err error) {
+func (s *Server) RequestIPv4(cid string) (ip net.IP, mask net.IPMask, ttl time.Duration, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.assignIPLocked(cid, s.cidIPv4Session, s.IPv4Pool)
 }
 
 // RequestIPv6 ...
-func (s *Server) RequestIPv6(cid string) (ip net.IP, ttl time.Duration, err error) {
+func (s *Server) RequestIPv6(cid string) (ip net.IP, mask net.IPMask, ttl time.Duration, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.assignIPLocked(cid, s.cidIPv6Session, s.IPv6Pool)
@@ -417,27 +419,31 @@ func (s *Server) Handler(ctx context.Context, prefix string) http.Handler {
 			}
 
 			var (
-				ip  net.IP
-				ttl time.Duration
-				err error
+				ip   net.IP
+				mask net.IPMask
+				ttl  time.Duration
+				err  error
 			)
 			if version == 4 {
-				ip, ttl, err = s.RequestIPv4(cid)
+				ip, mask, ttl, err = s.RequestIPv4(cid)
 			} else {
-				ip, ttl, err = s.RequestIPv6(cid)
+				ip, mask, ttl, err = s.RequestIPv6(cid)
 			}
 			if err != nil {
 				http.Error(w, err.Error(), getStatusCode(err))
 				return
 			}
+			notation, _ := mask.Size()
 
 			w.Header().Set("Content-Type", "application/json")
 			err = json.NewEncoder(w).Encode(&struct {
-				IP  string `json:"ip"`
-				TTL int    `json:"ttl"`
+				IP       string `json:"ip"`
+				Notation int    `json:"notation"`
+				TTL      int    `json:"ttl"`
 			}{
-				IP:  ip.String(),
-				TTL: int(ttl / time.Second),
+				IP:       ip.String(),
+				Notation: notation,
+				TTL:      int(ttl / time.Second),
 			})
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)

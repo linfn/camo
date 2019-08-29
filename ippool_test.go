@@ -11,7 +11,7 @@ func TestSubnetIPPool(t *testing.T) {
 	ippool.Use(net.ParseIP("10.20.0.10"), "")
 	ips := map[string]net.IP{}
 	for {
-		ip, ok := ippool.Get("")
+		ip, _, ok := ippool.Get("")
 		if !ok {
 			break
 		}
@@ -29,7 +29,7 @@ func TestSubnetIPPool(t *testing.T) {
 	}
 	ips = map[string]net.IP{}
 	for {
-		ip, ok := ippool.Get("")
+		ip, _, ok := ippool.Get("")
 		if !ok {
 			break
 		}
@@ -39,7 +39,7 @@ func TestSubnetIPPool(t *testing.T) {
 		t.Error()
 	}
 
-	if ippool.Use(net.ParseIP("10.30.0.10"), "") {
+	if _, ok := ippool.Use(net.ParseIP("10.30.0.10"), ""); ok {
 		t.Error()
 	}
 	ippool.Free(net.ParseIP("10.30.0.10"))

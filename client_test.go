@@ -68,20 +68,24 @@ func TestClient_RequestIP(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		reqIP      func(ctx context.Context) (ip net.IP, ttl time.Duration, err error)
+		reqIP      func(ctx context.Context) (ip net.IP, mask net.IPMask, ttl time.Duration, err error)
 		checkIPVer func(ip net.IP) bool
+		mask       net.IPMask
 	}{
-		{"v4", c.RequestIPv4, checkIsIPv4},
-		{"v6", c.RequestIPv6, checkIsIPv6},
+		{"v4", c.RequestIPv4, checkIsIPv4, net.CIDRMask(24, 32)},
+		{"v6", c.RequestIPv6, checkIsIPv6, net.CIDRMask(64, 128)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ip, _, err := tt.reqIP(ctx)
+			ip, mask, _, err := tt.reqIP(ctx)
 			if err != nil {
 				t.Error(err)
 			}
 			if !tt.checkIPVer(ip) {
 				t.Fatal("wrong ip version")
+			}
+			if mask.String() != tt.mask.String() {
+				t.Fatal("wrong ip mask")
 			}
 		})
 	}
@@ -101,7 +105,7 @@ func TestClient_OpenTunnel(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		reqIP func(ctx context.Context) (ip net.IP, ttl time.Duration, err error)
+		reqIP func(ctx context.Context) (ip net.IP, mask net.IPMask, ttl time.Duration, err error)
 		pkt   func(src net.IP) []byte
 	}{
 		{"v4", c.RequestIPv4, func(src net.IP) []byte { return newTestIPv4Packet(src, net.ParseIP("10.20.0.1")) }},
@@ -112,7 +116,7 @@ func TestClient_OpenTunnel(t *testing.T) {
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
 
-			ip, _, err := tt.reqIP(ctx)
+			ip, _, _, err := tt.reqIP(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}
