@@ -51,12 +51,15 @@ func TestServer_RequestIP(t *testing.T) {
 				t.Fatal("wrong ip mask")
 			}
 
-			ip11, _, _, err := tt.reqIP("camo1")
+			ip11, mask11, _, err := tt.reqIP("camo1")
 			if err != nil {
 				t.Fatal(err)
 			}
 			if !ip1.Equal(ip11) {
 				t.Error("Assign the different IP addresses to the same client")
+			}
+			if mask1.String() != mask11.String() {
+				t.Fatal("Assign the different IP Mask to the same ip address")
 			}
 
 			ip2, _, _, err := tt.reqIP("camo2")
