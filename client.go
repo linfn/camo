@@ -34,6 +34,7 @@ type Client struct {
 	Auth      func(r *http.Request)
 	Logger    Logger
 	UseH2C    bool
+	Noise     int
 
 	mu              sync.Mutex
 	bufPool         sync.Pool
@@ -293,6 +294,12 @@ func (c *Client) setAuth(r *http.Request) {
 	}
 }
 
+func (c *Client) setNoise(r *http.Request) {
+	if c.Noise != 0 {
+		r.Header.Set(headerNoise, getNoisePadding(c.Noise, r.Method+r.URL.Path))
+	}
+}
+
 // ClientAPIError ...
 type ClientAPIError struct {
 	Err  error
@@ -312,6 +319,7 @@ var testHookClientDoReq func(req *http.Request, res *http.Response, err error)
 
 func (c *Client) doReq(req *http.Request) (*http.Response, error) {
 	c.setAuth(req)
+	c.setNoise(req)
 
 	hc := c.httpClient()
 	res, err := hc.Do(req)

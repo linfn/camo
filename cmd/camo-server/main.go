@@ -5,7 +5,9 @@ import (
 	"crypto/tls"
 	"expvar"
 	"flag"
+	"hash/crc32"
 	stdlog "log"
+	"math/rand"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -14,7 +16,9 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
+	"github.com/denisbrodbeck/machineid"
 	"github.com/linfn/camo"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/net/http2"
@@ -211,6 +215,7 @@ func initServer() *camo.Server {
 	srv := &camo.Server{
 		MTU:    *mtu,
 		Logger: log,
+		Noise:  getNoise(),
 	}
 	initIPPool(srv)
 	expvar.Publish("camo", srv.Metrics())
@@ -233,6 +238,15 @@ func initIPPool(srv *camo.Server) {
 		}
 		srv.IPv6Pool = camo.NewSubnetIPPool(subnet, gw, 256)
 	}
+}
+
+func getNoise() int {
+	id, err := machineid.ProtectedID("camo")
+	if err == nil {
+		return int(crc32.ChecksumIEEE([]byte(id)))
+	}
+	log.Warnf("failed to get protected machineid: %v", err)
+	return rand.New(rand.NewSource(time.Now().UnixNano())).Int()
 }
 
 func initHTTPServer(handler http.Handler) *http.Server {

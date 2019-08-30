@@ -37,6 +37,7 @@ type Server struct {
 	IPv6Pool   IPPool
 	SessionTTL time.Duration
 	Logger     Logger
+	Noise      int
 
 	mu             sync.RWMutex
 	ipSession      map[string]*session
@@ -531,6 +532,17 @@ func (s *Server) Handler(ctx context.Context, prefix string) http.Handler {
 			log.Infof("tunnel %s closed", ip)
 		}
 	})
+
+	withNoise := func(noise int, handler http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(headerNoise, getNoisePadding(noise, r.Method+r.URL.Path))
+			handler.ServeHTTP(w, r)
+		})
+	}
+
+	if s.Noise != 0 {
+		return withNoise(s.Noise, mux)
+	}
 
 	return mux
 }
