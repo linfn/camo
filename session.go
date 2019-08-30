@@ -14,46 +14,55 @@ type session struct {
 	writeChan  chan []byte
 	createTime time.Time
 
-	mu           sync.Mutex
-	done         bool
-	refCount     int
+	mu    sync.Mutex
+	done  bool
+	owner chan struct{}
+
 	onRetained   func()
 	onReleased   func()
 	retainedTime time.Time
 	releasedTime time.Time
 }
 
-func (s *session) retain() bool {
+func (s *session) retain() (release func(), robbed <-chan struct{}, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.done {
-		return false
+		return
 	}
-	s.refCount++
-	if s.refCount == 1 {
-		s.retainedTime = time.Now()
-		if s.onRetained != nil {
-			s.onRetained()
+
+	if s.owner != nil {
+		s.releaseLocked()
+	}
+
+	owner := make(chan struct{})
+	s.owner = owner
+	s.retainedTime = time.Now()
+	if s.onRetained != nil {
+		s.onRetained()
+	}
+
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.owner == owner {
+			s.releaseLocked()
 		}
-	}
-	return true
+	}, owner, true
 }
 
-func (s *session) release() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.refCount--
-	if s.refCount == 0 {
-		s.releasedTime = time.Now()
-		if s.onReleased != nil {
-			s.onReleased()
-		}
+func (s *session) releaseLocked() {
+	close(s.owner)
+	s.owner = nil
+	s.releasedTime = time.Now()
+	if s.onReleased != nil {
+		s.onReleased()
 	}
 }
 
-func (s *session) setDone() (ok bool) {
+func (s *session) trySetDone() (ok bool) {
 	s.mu.Lock()
-	if s.refCount <= 0 {
+	if s.owner == nil {
 		s.done = true
 		ok = true
 	}

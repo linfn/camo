@@ -188,7 +188,7 @@ func (s *Server) createSessionLocked(ip net.IP, mask net.IPMask, gw net.IP, cid 
 
 	startTimer := func() *time.Timer {
 		return time.AfterFunc(s.sessionTTL(), func() {
-			if ss.setDone() {
+			if ss.trySetDone() {
 				s.removeSession(ss.ip)
 				log.Debugf("session %s expired", ss.ip)
 			}
@@ -343,12 +343,32 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 		return nil, err
 	}
 
-	return func(ctx context.Context) error {
-		if !ss.retain() {
-			rw.Close()
-			return errors.New("session expired")
+	release, robbed, ok := ss.retain()
+	if !ok {
+		return nil, errors.New("session expired")
+	}
+
+	return func(baseCtx context.Context) (err error) {
+		defer release()
+
+		ctx, cancel := context.WithCancel(baseCtx)
+		defer cancel()
+
+		var errOnce sync.Once
+		setErr := func(e error) {
+			errOnce.Do(func() {
+				err = e
+			})
 		}
-		defer ss.release()
+
+		go func() {
+			select {
+			case <-robbed:
+				setErr(errors.New("session is robbed"))
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
 
 		metrics := s.Metrics()
 		metrics.Tunnels.Streams.Add(1)
@@ -362,7 +382,7 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 			ifaceWrite = s.getIfaceWriteChan()
 			bufpool    = s
 		)
-		err := serveIO(ctx, rw, bufpool, func(done <-chan struct{}, pkt []byte) (retainBuf bool) {
+		setErr(serveIO(ctx, rw, bufpool, func(done <-chan struct{}, pkt []byte) (retainBuf bool) {
 			ver := GetIPPacketVersion(pkt)
 
 			if log.Level() >= LogLevelTrace {
@@ -404,10 +424,7 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 			case <-done:
 				return
 			}
-		}, ss.writeChan, postWrite)
-		if err == io.EOF {
-			return nil
-		}
+		}, ss.writeChan, postWrite))
 		return err
 	}, nil
 }

@@ -77,11 +77,27 @@ func TestServer_RequestIP(t *testing.T) {
 	}
 }
 
-func newBidirectionalStream() (io.ReadWriteCloser, io.ReadWriteCloser) {
-	type iorwc struct {
-		io.Reader
-		io.WriteCloser
+type iorwc struct {
+	io.ReadCloser
+	io.WriteCloser
+}
+
+func (i iorwc) Close() error {
+	err1 := i.ReadCloser.Close()
+	err2 := i.WriteCloser.Close()
+	if err1 != nil {
+		return err1
 	}
+	return err2
+}
+
+func uselessIO() io.ReadWriteCloser {
+	r, _ := io.Pipe()
+	_, w := io.Pipe()
+	return iorwc{r, w}
+}
+
+func newBidirectionalStream() (io.ReadWriteCloser, io.ReadWriteCloser) {
 	sendR, sendW := io.Pipe()
 	recvR, recvW := io.Pipe()
 	return iorwc{recvR, sendW}, iorwc{sendR, recvW}
@@ -163,18 +179,15 @@ func TestServer_OpenTunnel(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res1, err := tt.reqIP("camo1")
+			res, err := tt.reqIP("camo1")
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			var closeOnce sync.Once
 			rw, peer := newBidirectionalStream()
-			defer func() {
-				closeOnce.Do(func() { rw.Close() })
-			}()
+			defer rw.Close()
 
-			tunnel, err := srv.OpenTunnel(res1.IP, "camo1", peer)
+			tunnel, err := srv.OpenTunnel(res.IP, "camo1", peer)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -193,7 +206,7 @@ func TestServer_OpenTunnel(t *testing.T) {
 				}
 			}()
 
-			_, err = rw.Write(tt.pkt(res1.IP))
+			_, err = rw.Write(tt.pkt(res.IP))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -205,18 +218,14 @@ func TestServer_OpenTunnel(t *testing.T) {
 			}
 
 			cancel()
-			closeOnce.Do(func() { rw.Close() })
 			wg.Wait()
 
-			rw2, peer2 := newBidirectionalStream()
-			defer rw2.Close()
-
-			_, err = srv.OpenTunnel(res1.IP, "camo2", peer2)
+			_, err = srv.OpenTunnel(res.IP, "camo2", uselessIO())
 			if err == nil {
 				t.Error("Different clients cannot open the tunnel of the same ip address at the same time.")
 			}
 
-			_, err = srv.OpenTunnel(tt.specifiedIP, "camo2", peer2)
+			_, err = srv.OpenTunnel(tt.specifiedIP, "camo2", uselessIO())
 			if err != nil {
 				t.Error(err)
 			}
@@ -250,4 +259,32 @@ func TestServer_SessionTTL(t *testing.T) {
 			<-sessionRemovedChan
 		})
 	}
+}
+
+func TestServer_SessionRob(t *testing.T) {
+	srv := newTestServer()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rw1, peer1 := newBidirectionalStream()
+	defer rw1.Close()
+
+	tunnel1, err := srv.OpenTunnel(net.ParseIP("10.20.0.2"), "camo1", peer1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tunnel1Robbed := make(chan struct{})
+	go func() {
+		t.Log(tunnel1(ctx))
+		close(tunnel1Robbed)
+	}()
+
+	_, err = srv.OpenTunnel(net.ParseIP("10.20.0.2"), "camo1", uselessIO())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	<-tunnel1Robbed
 }

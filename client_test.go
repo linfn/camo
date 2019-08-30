@@ -125,11 +125,8 @@ func TestClient_OpenTunnel(t *testing.T) {
 				}
 			}()
 
-			var closeOnce sync.Once
 			rw, peer := newBidirectionalStream()
-			defer func() {
-				closeOnce.Do(func() { rw.Close() })
-			}()
+			defer rw.Close()
 
 			wg.Add(1)
 			go func() {
@@ -152,7 +149,6 @@ func TestClient_OpenTunnel(t *testing.T) {
 			}
 
 			cancel()
-			closeOnce.Do(func() { rw.Close() })
 			wg.Wait()
 		})
 	}
