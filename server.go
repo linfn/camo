@@ -12,8 +12,6 @@ import (
 	"time"
 )
 
-const headerClientID = "camo-client-id"
-
 const (
 	defaultServerIfaceWriteChanLen  = 256
 	defaultServerTunnelWriteChanLen = 256
