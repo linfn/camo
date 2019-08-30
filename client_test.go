@@ -12,7 +12,7 @@ import (
 	"golang.org/x/net/http2/h2c"
 )
 
-func startTestServer(ctx context.Context, t *testing.T) (addr string) {
+func startTestServer(ctx context.Context, t *testing.T, control func(s *Server)) (addr string) {
 	srv := Server{
 		IPv4Pool: NewSubnetIPPool(&net.IPNet{
 			IP:   net.ParseIP("10.20.0.1"),
@@ -22,6 +22,9 @@ func startTestServer(ctx context.Context, t *testing.T) (addr string) {
 			IP:   net.ParseIP("fc00:ca::1"),
 			Mask: net.CIDRMask(64, 128),
 		}, 255),
+	}
+	if control != nil {
+		control(&srv)
 	}
 
 	go func() {
@@ -51,7 +54,7 @@ func TestClient_RequestIP(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	srvAddr := startTestServer(ctx, t)
+	srvAddr := startTestServer(ctx, t, nil)
 
 	c := Client{
 		CID:    "camo1",
@@ -95,7 +98,7 @@ func TestClient_OpenTunnel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	srvAddr := startTestServer(ctx, t)
+	srvAddr := startTestServer(ctx, t, nil)
 
 	c := Client{
 		CID:    "camo1",

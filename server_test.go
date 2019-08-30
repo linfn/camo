@@ -230,7 +230,6 @@ func TestServer_OpenTunnel(t *testing.T) {
 }
 
 func TestServer_SessionTTL(t *testing.T) {
-	sessionRemovedChan := make(chan struct{})
 	srv := Server{
 		IPv4Pool: NewSubnetIPPool(&net.IPNet{
 			IP:   net.ParseIP("10.20.0.1"),
@@ -241,10 +240,13 @@ func TestServer_SessionTTL(t *testing.T) {
 			Mask: net.CIDRMask(64, 128),
 		}, 255),
 		SessionTTL: time.Nanosecond,
-		testSessionRemoveHook: func(*session) {
-			sessionRemovedChan <- struct{}{}
-		},
 	}
+
+	sessionRemovedChan := make(chan struct{})
+	testHookSessionRemoved = func(*session) {
+		sessionRemovedChan <- struct{}{}
+	}
+	defer func() { testHookSessionRemoved = nil }()
 
 	tests := []struct {
 		name  string

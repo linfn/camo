@@ -308,11 +308,16 @@ func (e *ClientAPIError) Temporary() bool {
 	return e.temp
 }
 
+var testHookClientDoReq func(req *http.Request, res *http.Response, err error)
+
 func (c *Client) doReq(req *http.Request) (*http.Response, error) {
 	c.setAuth(req)
 
 	hc := c.httpClient()
 	res, err := hc.Do(req)
+	if testHookClientDoReq != nil {
+		testHookClientDoReq(req, res, err)
+	}
 	if err != nil {
 		temp := true
 		if req.Context().Err() != nil {

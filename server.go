@@ -47,8 +47,6 @@ type Server struct {
 
 	metrics     *Metrics
 	metricsOnce sync.Once
-
-	testSessionRemoveHook func(ss *session)
 }
 
 func (s *Server) getIfaceWriteChan() chan []byte {
@@ -248,6 +246,8 @@ func (s *Server) getOrCreateSession(ip net.IP, cid string) (*session, error) {
 	return s.createSessionLocked(ip, ipmask, cid), nil
 }
 
+var testHookSessionRemoved func(ss *session)
+
 func (s *Server) removeSession(ip net.IP) {
 	s.mu.Lock()
 	if ss, ok := s.ipSession[ipSessionKey(ip)]; ok {
@@ -272,8 +272,8 @@ func (s *Server) removeSession(ip net.IP) {
 				break LOOP
 			}
 		}
-		if s.testSessionRemoveHook != nil {
-			s.testSessionRemoveHook(ss)
+		if testHookSessionRemoved != nil {
+			testHookSessionRemoved(ss)
 		}
 	} else {
 		s.mu.Unlock()
