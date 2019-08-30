@@ -6,11 +6,11 @@ export GOPROXY=https://goproxy.io
 
 go get -v ./...
 
-if [ -n "$CAMO_TUN_IP4" ]; then
+if [ "$CAMO_ENABLE_IP4" = true ]; then
     IP4FLAGS="--tun-ip4 $CAMO_TUN_IP4 -nat4"
 fi
 
-if [ -n "$CAMO_TUN_IP6" ]; then
+if [ "$CAMO_ENABLE_IP6" = true ]; then
     IP6FLAGS="--tun-ip6 $CAMO_TUN_IP6 -nat6"
 fi
 
