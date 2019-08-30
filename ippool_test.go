@@ -6,9 +6,8 @@ import (
 )
 
 func TestSubnetIPPool(t *testing.T) {
-	_, subnet, _ := net.ParseCIDR("10.20.0.10/24")
-	ippool := NewSubnetIPPool(subnet, 0)
-	ippool.Use(net.ParseIP("10.20.0.10"), "")
+	gw, subnet, _ := net.ParseCIDR("10.20.0.1/24")
+	ippool := NewSubnetIPPool(subnet, gw, 0)
 	ips := map[string]net.IP{}
 	for {
 		ip, _, ok := ippool.Get("")
@@ -20,8 +19,8 @@ func TestSubnetIPPool(t *testing.T) {
 	if len(ips) != 253 {
 		t.Error()
 	}
-	if _, ok := ips["10.20.0.10"]; ok {
-		t.Error()
+	if _, ok := ips["10.20.0.1"]; ok {
+		t.Error("can not assign the gateway's ip")
 	}
 
 	for _, v := range ips {

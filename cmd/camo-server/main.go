@@ -209,21 +209,19 @@ func initServer() *camo.Server {
 
 func initIPPool(srv *camo.Server) {
 	if *tunIPv4 != "" {
-		ip, subnet, err := net.ParseCIDR(*tunIPv4)
+		gw, subnet, err := net.ParseCIDR(*tunIPv4)
 		if err != nil {
 			log.Panic(err)
 		}
-		srv.IPv4Pool = camo.NewSubnetIPPool(subnet, 256)
-		srv.IPv4Pool.Use(ip, "")
+		srv.IPv4Pool = camo.NewSubnetIPPool(subnet, gw, 256)
 	}
 
 	if *tunIPv6 != "" {
-		ip, subnet, err := net.ParseCIDR(*tunIPv6)
+		gw, subnet, err := net.ParseCIDR(*tunIPv6)
 		if err != nil {
 			log.Panic(err)
 		}
-		srv.IPv6Pool = camo.NewSubnetIPPool(subnet, 256)
-		srv.IPv6Pool.Use(ip, "")
+		srv.IPv6Pool = camo.NewSubnetIPPool(subnet, gw, 256)
 	}
 }
 

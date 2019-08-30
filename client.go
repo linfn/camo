@@ -343,7 +343,7 @@ func (c *Client) doReq(req *http.Request) (*http.Response, error) {
 	return res, nil
 }
 
-func (c *Client) requestIP(ctx context.Context, ipVersion int) (ip net.IP, mask net.IPMask, ttl time.Duration, err error) {
+func (c *Client) requestIP(ctx context.Context, ipVersion int) (*IPResult, error) {
 	req := &http.Request{
 		Method: "POST",
 		URL:    c.url("/ip/v" + strconv.Itoa(ipVersion)),
@@ -353,7 +353,7 @@ func (c *Client) requestIP(ctx context.Context, ipVersion int) (ip net.IP, mask 
 	}
 	res, err := c.doReq(req.WithContext(ctx))
 	if err != nil {
-		return
+		return nil, err
 	}
 	defer res.Body.Close()
 
@@ -361,6 +361,7 @@ func (c *Client) requestIP(ctx context.Context, ipVersion int) (ip net.IP, mask 
 		IP       string `json:"ip"`
 		Notation int    `json:"notation"`
 		TTL      int    `json:"ttl"`
+		Gateway  string `json:"gateway"`
 	}
 	err = json.NewDecoder(res.Body).Decode(&result)
 	if err != nil {
@@ -368,13 +369,16 @@ func (c *Client) requestIP(ctx context.Context, ipVersion int) (ip net.IP, mask 
 		if _, ok := err.(*json.SyntaxError); ok {
 			temp = false
 		}
-		err = &ClientAPIError{Err: fmt.Errorf("failed to decode ip result, error: %s", err), temp: temp}
-		return
+		return nil, &ClientAPIError{Err: fmt.Errorf("failed to decode ip result, error: %s", err), temp: temp}
 	}
-	ip = net.ParseIP(result.IP)
+
+	var (
+		ip   = net.ParseIP(result.IP)
+		mask net.IPMask
+		gw   = net.ParseIP(result.Gateway)
+	)
 	if ip == nil {
-		err = &ClientAPIError{Err: fmt.Errorf("failed to decode ip (%s)", result.IP), temp: false}
-		return
+		return nil, &ClientAPIError{Err: fmt.Errorf("failed to decode ip (%s)", result.IP), temp: false}
 	}
 	if ip.To4() != nil {
 		if result.Notation > 0 && result.Notation <= 32 {
@@ -390,16 +394,16 @@ func (c *Client) requestIP(ctx context.Context, ipVersion int) (ip net.IP, mask 
 		}
 	}
 
-	return ip, mask, time.Duration(result.TTL) * time.Second, nil
+	return &IPResult{ip, mask, time.Duration(result.TTL) * time.Second, gw}, nil
 }
 
 // RequestIPv4 ...
-func (c *Client) RequestIPv4(ctx context.Context) (ip net.IP, mask net.IPMask, ttl time.Duration, err error) {
+func (c *Client) RequestIPv4(ctx context.Context) (*IPResult, error) {
 	return c.requestIP(ctx, 4)
 }
 
 // RequestIPv6 ...
-func (c *Client) RequestIPv6(ctx context.Context) (ip net.IP, mask net.IPMask, ttl time.Duration, err error) {
+func (c *Client) RequestIPv6(ctx context.Context) (*IPResult, error) {
 	return c.requestIP(ctx, 6)
 }
 

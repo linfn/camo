@@ -10,17 +10,21 @@ import (
 	"time"
 )
 
-func TestServer_RequestIP(t *testing.T) {
-	srv := Server{
+func newTestServer() *Server {
+	return &Server{
 		IPv4Pool: NewSubnetIPPool(&net.IPNet{
-			IP:   net.ParseIP("10.20.0.1"),
+			IP:   net.ParseIP("10.20.0.0"),
 			Mask: net.CIDRMask(24, 32),
-		}, 255),
+		}, net.ParseIP("10.20.0.1"), 255),
 		IPv6Pool: NewSubnetIPPool(&net.IPNet{
-			IP:   net.ParseIP("fc00:ca::1"),
+			IP:   net.ParseIP("fc00:ca::"),
 			Mask: net.CIDRMask(64, 128),
-		}, 255),
+		}, net.ParseIP("fc00:ca::1"), 255),
 	}
+}
+
+func TestServer_RequestIP(t *testing.T) {
+	srv := newTestServer()
 
 	checkIsIPv4 := func(ip net.IP) bool {
 		return ip.To4() != nil
@@ -31,7 +35,7 @@ func TestServer_RequestIP(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		reqIP      func(cid string) (ip net.IP, mask net.IPMask, ttl time.Duration, err error)
+		reqIP      func(cid string) (*IPResult, error)
 		checkIPVer func(ip net.IP) bool
 		mask       net.IPMask
 	}{
@@ -40,33 +44,33 @@ func TestServer_RequestIP(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ip1, mask1, _, err := tt.reqIP("camo1")
+			res1, err := tt.reqIP("camo1")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !tt.checkIPVer(ip1) {
+			if !tt.checkIPVer(res1.IP) {
 				t.Fatal("wrong ip version")
 			}
-			if mask1.String() != tt.mask.String() {
+			if res1.Mask.String() != tt.mask.String() {
 				t.Fatal("wrong ip mask")
 			}
 
-			ip11, mask11, _, err := tt.reqIP("camo1")
+			res11, err := tt.reqIP("camo1")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !ip1.Equal(ip11) {
+			if !res1.IP.Equal(res11.IP) {
 				t.Error("Assign the different IP addresses to the same client")
 			}
-			if mask1.String() != mask11.String() {
+			if res1.Mask.String() != res11.Mask.String() {
 				t.Fatal("Assign the different IP Mask to the same ip address")
 			}
 
-			ip2, _, _, err := tt.reqIP("camo2")
+			res2, err := tt.reqIP("camo2")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if ip1.Equal(ip2) {
+			if res1.IP.Equal(res2.IP) {
 				t.Error("Assign the same IP address to different clients")
 			}
 		})
@@ -136,16 +140,7 @@ func newTestIPv6Packet(src, dst net.IP) []byte {
 }
 
 func TestServer_OpenTunnel(t *testing.T) {
-	srv := Server{
-		IPv4Pool: NewSubnetIPPool(&net.IPNet{
-			IP:   net.ParseIP("10.20.0.1"),
-			Mask: net.CIDRMask(24, 32),
-		}, 255),
-		IPv6Pool: NewSubnetIPPool(&net.IPNet{
-			IP:   net.ParseIP("fc00:ca::1"),
-			Mask: net.CIDRMask(64, 128),
-		}, 255),
-	}
+	srv := newTestServer()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -159,7 +154,7 @@ func TestServer_OpenTunnel(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		reqIP       func(cid string) (ip net.IP, mask net.IPMask, ttl time.Duration, err error)
+		reqIP       func(cid string) (*IPResult, error)
 		specifiedIP net.IP
 		pkt         func(src net.IP) []byte
 	}{
@@ -168,7 +163,7 @@ func TestServer_OpenTunnel(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ip1, _, _, err := tt.reqIP("camo1")
+			res1, err := tt.reqIP("camo1")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -179,7 +174,7 @@ func TestServer_OpenTunnel(t *testing.T) {
 				closeOnce.Do(func() { rw.Close() })
 			}()
 
-			tunnel, err := srv.OpenTunnel(ip1, "camo1", peer)
+			tunnel, err := srv.OpenTunnel(res1.IP, "camo1", peer)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -198,7 +193,7 @@ func TestServer_OpenTunnel(t *testing.T) {
 				}
 			}()
 
-			_, err = rw.Write(tt.pkt(ip1))
+			_, err = rw.Write(tt.pkt(res1.IP))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -216,7 +211,7 @@ func TestServer_OpenTunnel(t *testing.T) {
 			rw2, peer2 := newBidirectionalStream()
 			defer rw2.Close()
 
-			_, err = srv.OpenTunnel(ip1, "camo2", peer2)
+			_, err = srv.OpenTunnel(res1.IP, "camo2", peer2)
 			if err == nil {
 				t.Error("Different clients cannot open the tunnel of the same ip address at the same time.")
 			}
@@ -230,17 +225,8 @@ func TestServer_OpenTunnel(t *testing.T) {
 }
 
 func TestServer_SessionTTL(t *testing.T) {
-	srv := Server{
-		IPv4Pool: NewSubnetIPPool(&net.IPNet{
-			IP:   net.ParseIP("10.20.0.1"),
-			Mask: net.CIDRMask(24, 32),
-		}, 255),
-		IPv6Pool: NewSubnetIPPool(&net.IPNet{
-			IP:   net.ParseIP("fc00:ca::1"),
-			Mask: net.CIDRMask(64, 128),
-		}, 255),
-		SessionTTL: time.Nanosecond,
-	}
+	srv := newTestServer()
+	srv.SessionTTL = time.Nanosecond
 
 	sessionRemovedChan := make(chan struct{})
 	testHookSessionRemoved = func(*session) {
@@ -250,14 +236,14 @@ func TestServer_SessionTTL(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		reqIP func(cid string) (ip net.IP, mask net.IPMask, ttl time.Duration, err error)
+		reqIP func(cid string) (*IPResult, error)
 	}{
 		{"v4", srv.RequestIPv4},
 		{"v6", srv.RequestIPv6},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, _, err := tt.reqIP("camo1")
+			_, err := tt.reqIP("camo1")
 			if err != nil {
 				t.Fatal(err)
 			}

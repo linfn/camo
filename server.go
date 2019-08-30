@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -167,7 +168,7 @@ func ipSessionKey(ip net.IP) string {
 	return string(ip)
 }
 
-func (s *Server) createSessionLocked(ip net.IP, mask net.IPMask, cid string) *session {
+func (s *Server) createSessionLocked(ip net.IP, mask net.IPMask, gw net.IP, cid string) *session {
 	if s.ipSession == nil {
 		s.ipSession = make(map[string]*session)
 		s.cidIPv4Session = make(map[string]*session)
@@ -180,6 +181,7 @@ func (s *Server) createSessionLocked(ip net.IP, mask net.IPMask, cid string) *se
 		cid:        cid,
 		ip:         ip,
 		mask:       mask,
+		gw:         gw,
 		createTime: time.Now(),
 		writeChan:  make(chan []byte, defaultServerTunnelWriteChanLen),
 	}
@@ -243,7 +245,7 @@ func (s *Server) getOrCreateSession(ip net.IP, cid string) (*session, error) {
 		return nil, ErrInvalidIP
 	}
 
-	return s.createSessionLocked(ip, ipmask, cid), nil
+	return s.createSessionLocked(ip, ipmask, ippool.Gateway(), cid), nil
 }
 
 var testHookSessionRemoved func(ss *session)
@@ -280,7 +282,19 @@ func (s *Server) removeSession(ip net.IP) {
 	}
 }
 
-func (s *Server) assignIPLocked(cid string, cidSession map[string]*session, ipPool IPPool) (ip net.IP, mask net.IPMask, ttl time.Duration, err error) {
+// IPResult is result returned by RequestIPv4/RequestIPv6
+type IPResult struct {
+	IP      net.IP
+	Mask    net.IPMask
+	TTL     time.Duration
+	Gateway net.IP
+}
+
+func (r *IPResult) String() string {
+	return fmt.Sprintf("ip=%s ttl=%d gw=%s", ToCIDR(r.IP, r.Mask), r.TTL, r.Gateway)
+}
+
+func (s *Server) assignIPLocked(cid string, cidSession map[string]*session, ipPool IPPool) (*IPResult, error) {
 	getTTL := func(ttl time.Duration, idle time.Duration) time.Duration {
 		d := ttl - idle
 		if d < 0 {
@@ -291,33 +305,32 @@ func (s *Server) assignIPLocked(cid string, cidSession map[string]*session, ipPo
 
 	ss, ok := cidSession[cid]
 	if ok {
-		return ss.ip, ss.mask, getTTL(s.sessionTTL(), ss.idleDuration()), nil
+		return &IPResult{ss.ip, ss.mask, getTTL(s.sessionTTL(), ss.idleDuration()), ss.gw}, nil
 	}
 
 	if ipPool == nil {
-		err = ErrNoIPConfig
-		return
+		return nil, ErrNoIPConfig
 	}
 
-	ip, mask, ok = ipPool.Get(cid)
+	ip, mask, ok := ipPool.Get(cid)
 	if !ok {
-		err = ErrUnableAssignIP
-		return
+		return nil, ErrUnableAssignIP
 	}
+	gw := ipPool.Gateway()
 
-	s.createSessionLocked(ip, mask, cid)
-	return ip, mask, s.sessionTTL(), nil
+	s.createSessionLocked(ip, mask, gw, cid)
+	return &IPResult{ip, mask, s.sessionTTL(), gw}, nil
 }
 
 // RequestIPv4 ...
-func (s *Server) RequestIPv4(cid string) (ip net.IP, mask net.IPMask, ttl time.Duration, err error) {
+func (s *Server) RequestIPv4(cid string) (*IPResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.assignIPLocked(cid, s.cidIPv4Session, s.IPv4Pool)
 }
 
 // RequestIPv6 ...
-func (s *Server) RequestIPv6(cid string) (ip net.IP, mask net.IPMask, ttl time.Duration, err error) {
+func (s *Server) RequestIPv6(cid string) (*IPResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.assignIPLocked(cid, s.cidIPv6Session, s.IPv6Pool)
@@ -417,31 +430,31 @@ func (s *Server) Handler(ctx context.Context, prefix string) http.Handler {
 			}
 
 			var (
-				ip   net.IP
-				mask net.IPMask
-				ttl  time.Duration
-				err  error
+				res *IPResult
+				err error
 			)
 			if version == 4 {
-				ip, mask, ttl, err = s.RequestIPv4(cid)
+				res, err = s.RequestIPv4(cid)
 			} else {
-				ip, mask, ttl, err = s.RequestIPv6(cid)
+				res, err = s.RequestIPv6(cid)
 			}
 			if err != nil {
 				http.Error(w, err.Error(), getStatusCode(err))
 				return
 			}
-			notation, _ := mask.Size()
+			notation, _ := res.Mask.Size()
 
 			w.Header().Set("Content-Type", "application/json")
 			err = json.NewEncoder(w).Encode(&struct {
 				IP       string `json:"ip"`
 				Notation int    `json:"notation"`
 				TTL      int    `json:"ttl"`
+				Gateway  string `json:"gateway"`
 			}{
-				IP:       ip.String(),
+				IP:       res.IP.String(),
 				Notation: notation,
-				TTL:      int(ttl / time.Second),
+				TTL:      int(res.TTL / time.Second),
+				Gateway:  res.Gateway.String(),
 			})
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)

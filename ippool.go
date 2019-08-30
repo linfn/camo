@@ -11,12 +11,14 @@ type IPPool interface {
 	Get(cid string) (net.IP, net.IPMask, bool)
 	Use(ip net.IP, cid string) (net.IPMask, bool)
 	Free(net.IP)
+	Gateway() net.IP
 }
 
 // SubnetIPPool assigns ip addresses in a subnet segment.
 // Currently supports up to 256 allocations.
 type SubnetIPPool struct {
 	subnet *net.IPNet
+	gw     net.IP
 	bitmap []bool
 	i      int
 	mu     sync.Mutex
@@ -37,7 +39,7 @@ func itoip(i int, subnet *net.IPNet) net.IP {
 }
 
 // NewSubnetIPPool ...
-func NewSubnetIPPool(subnet *net.IPNet, limit int) *SubnetIPPool {
+func NewSubnetIPPool(subnet *net.IPNet, gw net.IP, limit int) *SubnetIPPool {
 	ones, bits := subnet.Mask.Size()
 	x := bits - ones
 	if x > 8 {
@@ -49,20 +51,22 @@ func NewSubnetIPPool(subnet *net.IPNet, limit int) *SubnetIPPool {
 	}
 	p := &SubnetIPPool{
 		subnet: subnet,
+		gw:     gw,
 		bitmap: make([]bool, size),
 	}
+	p.bitmap[0] = true
 	if subnet.IP.To4() != nil {
-		p.bitmap[0] = true
 		last := itoip(size-1, subnet)
 		if last[len(last)-1] == 255 {
 			p.bitmap[size-1] = true
 		}
 	}
+	p.Use(gw, "")
 	return p
 }
 
 // Get ...
-func (p *SubnetIPPool) Get(_ string) (net.IP, net.IPMask, bool) {
+func (p *SubnetIPPool) Get(_ string) (ip net.IP, mask net.IPMask, ok bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	size := len(p.bitmap)
@@ -73,14 +77,14 @@ func (p *SubnetIPPool) Get(_ string) (net.IP, net.IPMask, bool) {
 			return itoip(p.i, p.subnet), p.subnet.Mask, true
 		}
 	}
-	return nil, nil, false
+	return
 }
 
 // Use ...
-func (p *SubnetIPPool) Use(ip net.IP, _ string) (net.IPMask, bool) {
+func (p *SubnetIPPool) Use(ip net.IP, _ string) (mask net.IPMask, ok bool) {
 	i := iptoi(ip, p.subnet)
 	if i < 0 || i >= len(p.bitmap) {
-		return nil, false
+		return
 	}
 	p.mu.Lock()
 	p.bitmap[i] = true
@@ -97,4 +101,9 @@ func (p *SubnetIPPool) Free(ip net.IP) {
 	p.mu.Lock()
 	p.bitmap[i] = false
 	p.mu.Unlock()
+}
+
+// Gateway ...
+func (p *SubnetIPPool) Gateway() net.IP {
+	return p.gw
 }

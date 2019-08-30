@@ -6,27 +6,12 @@ import (
 	"net/http"
 	"sync"
 	"testing"
-	"time"
 
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
 
-func startTestServer(ctx context.Context, t *testing.T, control func(s *Server)) (addr string) {
-	srv := Server{
-		IPv4Pool: NewSubnetIPPool(&net.IPNet{
-			IP:   net.ParseIP("10.20.0.1"),
-			Mask: net.CIDRMask(24, 32),
-		}, 255),
-		IPv6Pool: NewSubnetIPPool(&net.IPNet{
-			IP:   net.ParseIP("fc00:ca::1"),
-			Mask: net.CIDRMask(64, 128),
-		}, 255),
-	}
-	if control != nil {
-		control(&srv)
-	}
-
+func startTestServer(ctx context.Context, t *testing.T, srv *Server) (addr string) {
 	go func() {
 		err := srv.ServeIface(ctx, newIfaceIOMock())
 		if err != nil && ctx.Err() == nil {
@@ -54,7 +39,7 @@ func TestClient_RequestIP(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	srvAddr := startTestServer(ctx, t, nil)
+	srvAddr := startTestServer(ctx, t, newTestServer())
 
 	c := Client{
 		CID:    "camo1",
@@ -71,7 +56,7 @@ func TestClient_RequestIP(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		reqIP      func(ctx context.Context) (ip net.IP, mask net.IPMask, ttl time.Duration, err error)
+		reqIP      func(ctx context.Context) (*IPResult, error)
 		checkIPVer func(ip net.IP) bool
 		mask       net.IPMask
 	}{
@@ -80,14 +65,14 @@ func TestClient_RequestIP(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ip, mask, _, err := tt.reqIP(ctx)
+			res, err := tt.reqIP(ctx)
 			if err != nil {
 				t.Error(err)
 			}
-			if !tt.checkIPVer(ip) {
+			if !tt.checkIPVer(res.IP) {
 				t.Fatal("wrong ip version")
 			}
-			if mask.String() != tt.mask.String() {
+			if res.Mask.String() != tt.mask.String() {
 				t.Fatal("wrong ip mask")
 			}
 		})
@@ -98,7 +83,7 @@ func TestClient_OpenTunnel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	srvAddr := startTestServer(ctx, t, nil)
+	srvAddr := startTestServer(ctx, t, newTestServer())
 
 	c := Client{
 		CID:    "camo1",
@@ -108,7 +93,7 @@ func TestClient_OpenTunnel(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		reqIP func(ctx context.Context) (ip net.IP, mask net.IPMask, ttl time.Duration, err error)
+		reqIP func(ctx context.Context) (*IPResult, error)
 		pkt   func(src net.IP) []byte
 	}{
 		{"v4", c.RequestIPv4, func(src net.IP) []byte { return newTestIPv4Packet(src, net.ParseIP("10.20.0.1")) }},
@@ -119,12 +104,12 @@ func TestClient_OpenTunnel(t *testing.T) {
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
 
-			ip, _, _, err := tt.reqIP(ctx)
+			res, err := tt.reqIP(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			tunnel, err := c.OpenTunnel(ctx, ip)
+			tunnel, err := c.OpenTunnel(ctx, res.IP)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -155,7 +140,7 @@ func TestClient_OpenTunnel(t *testing.T) {
 				}
 			}()
 
-			_, err = rw.Write(tt.pkt(ip))
+			_, err = rw.Write(tt.pkt(res.IP))
 			if err != nil {
 				t.Fatal(err)
 			}

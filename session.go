@@ -10,6 +10,7 @@ type session struct {
 	cid        string
 	ip         net.IP
 	mask       net.IPMask
+	gw         net.IP
 	writeChan  chan []byte
 	createTime time.Time
 

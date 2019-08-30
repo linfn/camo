@@ -268,22 +268,23 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 
-		var (
-			ip   net.IP
-			mask net.IPMask
-			ttl  time.Duration
-		)
+		var res *camo.IPResult
 		if ipVersion == 4 {
-			ip, mask, ttl, err = c.RequestIPv4(ctx)
+			res, err = c.RequestIPv4(ctx)
 		} else {
-			ip, mask, ttl, err = c.RequestIPv6(ctx)
+			res, err = c.RequestIPv6(ctx)
 		}
 		if err != nil {
 			cancel()
 			return nil, err
 		}
 
-		log.Infof("client get ip (%s) ttl (%d)", camo.ToCIDR(ip, mask), ttl)
+		log.Infof("client get %s", res)
+
+		var (
+			ip   = res.IP
+			mask = res.Mask
+		)
 
 		tunnel, err := c.OpenTunnel(ctx, ip)
 		if err != nil {
