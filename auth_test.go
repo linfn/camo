@@ -1,23 +1,32 @@
 package camo
 
 import (
-	"crypto/subtle"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
 func TestAuth(t *testing.T) {
-	r := &http.Request{}
-	SetAuth(r, "123456")
+	const wantPassword = "123456"
+	auth := func(password string) int {
+		var (
+			r http.Request
+			w = httptest.NewRecorder()
+		)
+		if password != "" {
+			SetAuth(&r, password)
+		}
+		WithAuth(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), wantPassword, nil).ServeHTTP(w, &r)
+		return w.Code
+	}
 
-	text, mac, ok := GetAuth(r)
-	if !ok {
-		t.Fatal()
+	if auth(wantPassword) != 200 {
+		t.Error()
 	}
-	if subtle.ConstantTimeCompare(mac, HmacSha256(text, "123456")) != 1 {
-		t.Fatal()
+	if auth(wantPassword+"1") != 404 {
+		t.Error()
 	}
-	if subtle.ConstantTimeCompare(mac, HmacSha256(text, "111111")) == 1 {
-		t.Fatal()
+	if auth("") != 404 {
+		t.Error()
 	}
 }
