@@ -10,4 +10,4 @@ if [ "$CAMO_ENABLE_IP6" = true ]; then
     IP6FLAGS="--tun-ip6 $CAMO_TUN_IP6 -nat6"
 fi
 
-exec ./camo-server $IP4FLAGS $IP6FLAGS --autocert-host "$CAMO_HOST" --log-level "$CAMO_LOG_LEVEL"
+exec ./camo-server $IP4FLAGS $IP6FLAGS $*
