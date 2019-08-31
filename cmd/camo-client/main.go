@@ -83,6 +83,13 @@ func init() {
 		if *password == "" {
 			log.Fatal("missing password")
 		}
+	} else {
+		// hidden the password to expvar and pprof package
+		for i := range os.Args {
+			if os.Args[i] == "-password" || os.Args[i] == "--password" {
+				os.Args[i+1] = "*"
+			}
+		}
 	}
 
 	cid = ensureCID(host)

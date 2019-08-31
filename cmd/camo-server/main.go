@@ -8,7 +8,7 @@ import (
 	stdlog "log"
 	"net"
 	"net/http"
-	"net/http/pprof"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
@@ -37,6 +37,7 @@ var (
 	autocertEmail = flag.String("autocert-email", "", "(optional) email address")
 	logLevel      = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
 	useH2C        = flag.Bool("h2c", false, "use h2c (for debug)")
+	debugHTTP     = flag.String("debug-http", "", "debug http server listen address")
 )
 
 var (
@@ -55,6 +56,13 @@ func init() {
 		*password = os.Getenv("CAMO_PASSWORD")
 		if *password == "" {
 			log.Fatal("missing password")
+		}
+	} else {
+		// hidden the password to expvar and pprof package
+		for i := range os.Args {
+			if os.Args[i] == "-password" || os.Args[i] == "--password" {
+				os.Args[i+1] = "*"
+			}
 		}
 	}
 
@@ -95,8 +103,6 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/", withLog(log, srv.Handler(ctx, "")))
-	mux.Handle("/debug/vars", expvar.Handler())
-	handlePProf(mux)
 
 	hsrv := initHTTPServer(camo.WithAuth(mux, *password, log))
 
@@ -137,6 +143,10 @@ func main() {
 			exit(hsrv.ListenAndServe())
 		}
 	}()
+
+	if *debugHTTP != "" {
+		go debugHTTPServer()
+	}
 
 	wg.Wait()
 }
@@ -253,10 +263,9 @@ func withLog(log camo.Logger, h http.Handler) http.Handler {
 	})
 }
 
-func handlePProf(mux *http.ServeMux) {
-	mux.HandleFunc("/debug/pprof/", pprof.Index)
-	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+func debugHTTPServer() {
+	err := http.ListenAndServe(*debugHTTP, nil)
+	if err != http.ErrServerClosed {
+		log.Errorf("debug http server exited: %v", err)
+	}
 }

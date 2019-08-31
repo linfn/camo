@@ -16,5 +16,7 @@ ENV CAMO_ENABLE_IP6=false
 ENV CAMO_TUN_IP6=fc00:ca::1/64
 
 EXPOSE 443
+# debug http port
+EXPOSE 6060
 
 CMD [ "docker/docker-dev-entrypoint.sh" ]
