@@ -17,4 +17,4 @@ ENV CAMO_TUN_IP6=fc00:ca::1/64
 
 EXPOSE 443
 
-CMD [ "./docker-dev-entrypoint.sh" ]
+CMD [ "docker/docker-dev-entrypoint.sh" ]

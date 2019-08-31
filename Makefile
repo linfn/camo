@@ -18,7 +18,7 @@ DOCKER_NETWORK=bridge
 
 .PHONY: docker-dev
 docker-dev:
-	docker build -t camo:dev -f Dockerfile.dev --build-arg USE_CN_APT_SOURCES .
+	docker build -t camo:dev -f docker/Dockerfile.dev --build-arg USE_CN_APT_SOURCES .
 	docker rm -f $(DEV_CONTAINER_NAME) 2>/dev/null || true
 	docker create -it -v `pwd`:/camo -p 443:443 \
 		--cap-add=NET_ADMIN --device /dev/net/tun \
@@ -34,3 +34,6 @@ run:
 	@[ -n "`docker ps -aq -f name=$(DEV_CONTAINER_NAME)`" ] || $(MAKE) docker-dev
 	docker restart $(DEV_CONTAINER_NAME) 
 	docker attach $(DEV_CONTAINER_NAME)
+
+docker-release:
+	docker build -t linfn/camo -f docker/Dockerfile.release .
