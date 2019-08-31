@@ -153,3 +153,41 @@ func TestClient_OpenTunnel(t *testing.T) {
 		})
 	}
 }
+
+func TestClient_Noise(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	srv := newTestServer()
+	srv.Noise = 1
+	srvAddr := startTestServer(ctx, t, srv)
+
+	c := Client{
+		CID:    "camo1",
+		Host:   srvAddr,
+		UseH2C: true,
+		Noise:  2,
+	}
+
+	testHookClientDoReq = func(req *http.Request, res *http.Response, err error) {
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if len(req.Header.Get(headerNoise)) == 0 {
+			t.Errorf("request missing noise header. url: %s %s", req.Method, req.URL.Path)
+		} else {
+			t.Logf("request noise padding size: %d", len(req.Header.Get(headerNoise)))
+		}
+		if len(res.Header.Get(headerNoise)) == 0 {
+			t.Errorf("response missing noise header. url: %s %s", req.Method, req.URL.Path)
+		} else {
+			t.Logf("response noise padding size: %d", len(res.Header.Get(headerNoise)))
+		}
+	}
+	defer func() { testHookClientDoReq = nil }()
+
+	res, _ := c.RequestIPv4(ctx)
+	c.RequestIPv6(ctx)
+	c.OpenTunnel(ctx, res.IP)
+}

@@ -10,6 +10,7 @@ import (
 	"expvar"
 	"flag"
 	"fmt"
+	"hash/crc32"
 	"io/ioutil"
 	stdlog "log"
 	"net"
@@ -129,6 +130,7 @@ func main() {
 		Auth:   func(r *http.Request) { camo.SetAuth(r, *password) },
 		Logger: log,
 		UseH2C: *useH2C,
+		Noise:  getNoise(),
 	}
 
 	expvar.Publish("camo", c.Metrics())
@@ -203,6 +205,10 @@ func ensureCID(host string) string {
 	mac := hmac.New(sha256.New, b)
 	mac.Write([]byte("camo@" + host))
 	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func getNoise() int {
+	return int(crc32.ChecksumIEEE([]byte(cid)))
 }
 
 func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP, net.IPMask) (func(), error) {
