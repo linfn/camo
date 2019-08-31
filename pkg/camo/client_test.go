@@ -2,11 +2,15 @@ package camo
 
 import (
 	"context"
+	"crypto/tls"
+	"errors"
 	"net"
 	"net/http"
 	"sync"
 	"testing"
 
+	"github.com/linfn/camo/pkg/util"
+	"github.com/lucas-clemente/quic-go/http3"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
@@ -193,6 +197,105 @@ func TestClient_Noise(t *testing.T) {
 		t.Error(err)
 	}
 	_, err = c.CreateTunnel(ctx, res.IP)
+	if err != nil {
+		t.Error(err)
+	}
+}
+
+func startTestH3Server(ctx context.Context, t *testing.T, srv *Server) (addr string) {
+	go func() {
+		err := srv.ServeIface(ctx, newIfaceIOMock())
+		if err != nil && ctx.Err() == nil {
+			t.Error(err)
+		}
+	}()
+
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h3 := http3.Server{
+		Server: &http.Server{
+			TLSConfig: &tls.Config{
+				SessionTicketKey: NewSessionTicketKey("camotest"),
+				GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+					return nil, errors.New("(PSK) bad certificate")
+				},
+			},
+			Handler: srv.Handler(ctx, ""),
+		},
+	}
+	go func() { _ = h3.Serve(conn) }()
+
+	go func() {
+		<-ctx.Done()
+		h3.Close()
+	}()
+
+	return conn.LocalAddr().String()
+}
+
+func TestH3(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	srvAddr := startTestH3Server(ctx, t, newTestServer())
+
+	cs, err := NewTLSPSKSessionCache(util.StripPort(srvAddr), NewSessionTicketKey("camotest"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := Client{
+		CID:  "camo1",
+		Host: srvAddr,
+		TLSConfig: &tls.Config{
+			ServerName:         util.StripPort(srvAddr),
+			ClientSessionCache: cs,
+		},
+		UseH3: true,
+	}
+
+	res, err := c.RequestIPv4(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tunnel, err := c.CreateTunnel(ctx, res.IP)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := tunnel(ctx)
+		if err != nil && ctx.Err() == nil {
+			t.Error(err)
+		}
+	}()
+
+	rw, peer := newBidirectionalStream()
+	defer rw.Close()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := c.ServeIface(ctx, peer)
+		if err != nil && ctx.Err() == nil {
+			t.Error(err)
+		}
+	}()
+
+	_, err = rw.Write(newTestIPv4Packet(res.IP, net.ParseIP("10.20.0.1")))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var recvBuf [DefaultMTU]byte
+	_, err = ReadIPPacket(rw, recvBuf[:])
 	if err != nil {
 		t.Error(err)
 	}

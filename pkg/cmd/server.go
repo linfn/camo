@@ -21,6 +21,7 @@ import (
 	"github.com/linfn/camo/pkg/env"
 	"github.com/linfn/camo/pkg/machineid"
 	"github.com/linfn/camo/pkg/util"
+	"github.com/lucas-clemente/quic-go/http3"
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/net/http2"
@@ -148,12 +149,15 @@ func (cmd *Server) Run(args ...string) {
 	mux := http.NewServeMux()
 	mux.Handle("/", cmd.withLog(srv.Handler(ctx, "")))
 
-	hsrv := cmd.initHTTPServer(camo.WithAuth(mux, cmd.password, log))
+	handler := camo.WithAuth(mux, cmd.password, log)
+	h2 := cmd.initHTTPServer(handler)
+	h3 := cmd.initHTTP3Server(handler)
 
 	var exitOnce sync.Once
 	exit := func(err error) {
 		exitOnce.Do(func() {
-			hsrv.Close()
+			h2.Close()
+			h3.Close()
 			cancel()
 			if err != nil {
 				log.Errorf("server exits with error %v", err)
@@ -182,11 +186,19 @@ func (cmd *Server) Run(args ...string) {
 	go func() {
 		defer wg.Done()
 		if !cmd.useH2C {
-			exit(hsrv.ListenAndServeTLS("", ""))
+			exit(h2.ListenAndServeTLS("", ""))
 		} else {
-			exit(hsrv.ListenAndServe())
+			exit(h2.ListenAndServe())
 		}
 	}()
+
+	if !cmd.useH2C {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			exit(h3.ListenAndServe())
+		}()
+	}
 
 	if cmd.debugHTTP != "" {
 		go cmd.debugHTTPServer()
@@ -298,6 +310,12 @@ func (cmd *Server) initHTTPServer(handler http.Handler) *http.Server {
 		hsrv.Handler = handler
 	}
 	return hsrv
+}
+
+func (cmd *Server) initHTTP3Server(handler http.Handler) *http3.Server {
+	return &http3.Server{
+		Server: cmd.initHTTPServer(handler),
+	}
 }
 
 func (cmd *Server) initTLSConfig() *tls.Config {

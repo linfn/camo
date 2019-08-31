@@ -486,7 +486,7 @@ func (s *Server) Handler(ctx context.Context, prefix string) http.Handler {
 	mux.HandleFunc(prefix+"/ip/v6", ipHandler(6))
 
 	mux.HandleFunc(prefix+"/tunnel/", func(w http.ResponseWriter, r *http.Request) {
-		if r.ProtoMajor != 2 {
+		if r.ProtoMajor < 2 {
 			http.Error(w, "HTTP/2.0 required", http.StatusUpgradeRequired)
 			return
 		}
@@ -519,6 +519,7 @@ func (s *Server) Handler(ctx context.Context, prefix string) http.Handler {
 			return
 		}
 
+		w.WriteHeader(http.StatusOK)
 		// flush the header frame
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
