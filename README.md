@@ -4,6 +4,9 @@ Camo is a VPN using HTTP/2 over TLS.
 
 我理想的 proxy, 是所有流量都走 HTTPS, 一切看起来就像访问一个正常的网站一样.
 
+[![Build Status](https://travis-ci.com/linfn/camo.svg?branch=master)](https://travis-ci.com/linfn/camo)
+[![codecov](https://codecov.io/gh/linfn/camo/branch/master/graph/badge.svg)](https://codecov.io/gh/linfn/camo)
+
 ## Features
 
 1. 使用 HTTP/2 over TLS 建立隧道
