@@ -18,7 +18,7 @@ Camo is a VPN using HTTP/2 over TLS.
 
 camo 内置了 autocert (via Let's Encrypt), 将你的域名指向你的 IP 后, 启动 `camo-server` 即可
 
-```
+```sh
 docker run -d --cap-add=NET_ADMIN --device /dev/net/tun \
     -p 443:443 \
     -v $HOME/.cache/camo/certs:/root/.cache/camo/certs \
@@ -36,7 +36,7 @@ docker run -d --cap-add=NET_ADMIN --device /dev/net/tun \
 
 **Step 1**: 首先需要在 docker 中创建一个 IPv6 network
 
-```
+```sh
 docker network create --ipv6 --subnet 2001:db8:1::/64 ipv6
 ```
 
@@ -45,11 +45,11 @@ docker network create --ipv6 --subnet 2001:db8:1::/64 ipv6
 
 **Step 2**: 运行 `camo-server`
 
-```
+```sh
 docker run -d --cap-add=NET_ADMIN --device /dev/net/tun \
-	--sysctl net.ipv6.conf.all.disable_ipv6=0 \
-	--sysctl net.ipv6.conf.default.forwarding=1 \
-	--sysctl net.ipv6.conf.all.forwarding=1 \
+    --sysctl net.ipv6.conf.all.disable_ipv6=0 \
+    --sysctl net.ipv6.conf.default.forwarding=1 \
+    --sysctl net.ipv6.conf.all.forwarding=1 \
     --network ipv6 \
     -p 443:443 \
     -v $HOME/.cache/camo/certs:/root/.cache/camo/certs \
@@ -63,7 +63,7 @@ docker run -d --cap-add=NET_ADMIN --device /dev/net/tun \
 
 如果你使用 Public IP 模式 (方式一), 为了让 Router 能够找到容器, 你需要启用 [NDP Proxy](https://en.wikipedia.org/wiki/Neighbor_Discovery_Protocol)
 
-```
+```sh
 sysctl net.ipv6.conf.eth0.proxy_ndp=1
 ip -6 neigh add proxy <IPv6 address of container> dev eth0
 ```
@@ -73,7 +73,7 @@ ip -6 neigh add proxy <IPv6 address of container> dev eth0
 
 如果你使用 NAT 模式 (方式二):
 
-```
+```sh
 ip6tables -t nat -A POSTROUTING -s 2001:db8:1::/64 -j MASQUERADE
 ```
 
@@ -88,19 +88,19 @@ ip6tables -t nat -A POSTROUTING -s 2001:db8:1::/64 -j MASQUERADE
 
 使用 [go](https://golang.org) 获取 `camo-client`
 
-```
+```sh
 go get github.com/linfn/camo/cmd/camo-client
 ```
 
 启动 `camo-client` (需要 root 权限)
 
-```
+```sh
 sudo camo-client -password <password> <hostname>
 ```
 
 `camo-client` 会创建一个 `tun` 设备, 并同时接管 IPv4 和 IPv6 流量 (如果服务器启用了 IPv6 的话), 可以通过 `-4` 或 `-6` flag 进行设置
 
-```
+```sh
 # IPv4 only
 sudo camo-client -4 -password <password> <hostname>
 # IPv6 only
@@ -111,7 +111,7 @@ sudo camo-client -6 -password <password> <hostname>
 
 golang (1.12 or newer) required.
 
-```
+```sh
 make
 ```
 
