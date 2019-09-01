@@ -116,6 +116,8 @@ func main() {
 	}
 	defer iface.Close()
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	c := &camo.Client{
 		MTU:  *mtu,
 		CID:  cid,
@@ -129,7 +131,8 @@ func main() {
 			if *resolve != "" {
 				addr = *resolve
 			}
-			conn, err := net.Dial(network, addr)
+			var d net.Dialer
+			conn, err := d.DialContext(ctx, network, addr)
 			if err == nil {
 				remoteAddr.Store(conn.RemoteAddr())
 			}
@@ -142,8 +145,6 @@ func main() {
 	}
 
 	expvar.Publish("camo", c.Metrics())
-
-	ctx, cancel := context.WithCancel(context.Background())
 
 	go func() {
 		c := make(chan os.Signal)

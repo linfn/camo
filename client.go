@@ -221,6 +221,7 @@ func (c *Client) newTransport() (ts http.RoundTripper) {
 	var (
 		mu           sync.Mutex
 		resolvedAddr net.Addr
+		log          = c.logger()
 	)
 	return &http2.Transport{
 		DialTLS: func(network, addr string, cfg *tls.Config) (conn net.Conn, err error) {
@@ -251,6 +252,8 @@ func (c *Client) newTransport() (ts http.RoundTripper) {
 				mu.Unlock()
 				locked = false
 			}
+
+			log.Infof("connection succeeded. remote: %s", conn.RemoteAddr())
 
 			if !c.UseH2C {
 				// http2: Transport.dialTLSDefault
@@ -349,11 +352,7 @@ func (c *Client) doReq(req *http.Request) (*http.Response, error) {
 		testHookClientDoReq(req, res, err)
 	}
 	if err != nil {
-		temp := true
-		if req.Context().Err() != nil {
-			temp = false
-		}
-		return nil, &ClientAPIError{Err: err, temp: temp}
+		return nil, &ClientAPIError{Err: err, temp: true}
 	}
 
 	if res.StatusCode != http.StatusOK {
