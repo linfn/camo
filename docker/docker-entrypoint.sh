@@ -2,6 +2,10 @@
 
 set -e
 
+if [ ! -f /var/lib/dbus/machine-id ]; then
+    dbus-uuidgen > /var/lib/dbus/machine-id
+fi
+
 if [ "$CAMO_ENABLE_IP4" = true ]; then
     IP4FLAGS="--tun-ip4 $CAMO_TUN_IP4 -nat4"
 fi
