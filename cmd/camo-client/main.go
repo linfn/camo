@@ -33,10 +33,13 @@ var camoDir = getCamoDir()
 var (
 	help      = flag.Bool("help", false, "help")
 	password  = flag.String("password", "", "Set a password. It is recommended to use the environment variable CAMO_PASSWORD to set the password.")
-	inet4     = flag.Bool("4", false, "resolve host name to IPv4 addresses only")
-	inet6     = flag.Bool("6", false, "resolve host name to IPv6 addresses only")
+	tun4      = flag.Bool("4", false, "tunneling for IPv4 only")
+	tun6      = flag.Bool("6", false, "tunneling for IPv6 only")
 	resolve   = flag.String("resolve", "", "provide a custom address for a specific host and port pair")
+	resolve4  = flag.Bool("resolve4", false, "resolve host name to IPv4 addresses only")
+	resolve6  = flag.Bool("resolve6", false, "resolve host name to IPv6 addresses only")
 	mtu       = flag.Int("mtu", camo.DefaultMTU, "mtu")
+	reGateway = flag.Bool("redirect-gateway", true, "redirect the gateway")
 	logLevel  = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
 	useH2C    = flag.Bool("h2c", false, "use h2c (for debug)")
 	debugHTTP = flag.String("debug-http", "", "debug http server listen address")
@@ -67,8 +70,13 @@ func init() {
 		log.Fatal("missing host")
 	}
 
-	if *inet4 && *inet6 {
-		log.Fatal("can not use -4 and -6 at the same time")
+	if !*tun4 && !*tun6 {
+		*tun4 = true
+		*tun6 = true
+	}
+
+	if *resolve4 && *resolve6 {
+		log.Fatal("can not use -resolve4 and -resolve6 at the same time")
 	}
 
 	if *resolve != "" {
@@ -113,9 +121,9 @@ func main() {
 		CID:  cid,
 		Host: host,
 		Dial: func(network, addr string) (net.Conn, error) {
-			if *inet4 {
+			if *resolve4 {
 				network = "tcp4"
-			} else if *inet6 {
+			} else if *resolve6 {
 				network = "tcp6"
 			}
 			if *resolve != "" {
@@ -239,37 +247,38 @@ func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP, net.IPMask)
 		}
 		log.Infof("%s(%s) up", iface.Name(), cidr)
 
-		// bypass tun for server ip
+		if *reGateway {
+			// bypass tun for server ip
+			srvAddr, _ := remoteAddr.Load().(net.Addr)
+			if srvAddr == nil {
+				return nil, errors.New("failed to get server address")
+			}
+			srvIP, _, err := net.SplitHostPort(srvAddr.String())
+			if err != nil {
+				return nil, fmt.Errorf("failed to get server ip: %v (%s)", err, srvAddr)
+			}
+			srvIPVer := 4
+			if !camo.IsIPv4(srvIP) {
+				srvIPVer = 6
+			}
+			if srvIPVer == tunIPVer {
+				oldGateway, oldDev, err := camo.GetRoute(srvIP)
+				if err != nil {
+					return nil, err
+				}
+				err = camo.AddRoute(srvIP, oldGateway, oldDev)
+				if err != nil {
+					return nil, err
+				}
+				rollback.Add(func() { camo.DelRoute(srvIP, oldGateway, oldDev) })
+			}
 
-		srvAddr, _ := remoteAddr.Load().(net.Addr)
-		if srvAddr == nil {
-			return nil, errors.New("failed to get server address")
-		}
-		srvIP, _, err := net.SplitHostPort(srvAddr.String())
-		if err != nil {
-			return nil, fmt.Errorf("failed to get server ip: %v (%s)", err, srvAddr)
-		}
-		srvIPVer := 4
-		if !camo.IsIPv4(srvIP) {
-			srvIPVer = 6
-		}
-		if srvIPVer == tunIPVer {
-			oldGateway, oldDev, err := camo.GetRoute(srvIP)
+			resetGateway, err := camo.RedirectGateway(iface.Name(), tunIP.String())
 			if err != nil {
 				return nil, err
 			}
-			err = camo.AddRoute(srvIP, oldGateway, oldDev)
-			if err != nil {
-				return nil, err
-			}
-			rollback.Add(func() { camo.DelRoute(srvIP, oldGateway, oldDev) })
+			rollback.Add(resetGateway)
 		}
-
-		resetGateway, err := camo.RedirectGateway(iface.Name(), tunIP.String())
-		if err != nil {
-			return nil, err
-		}
-		rollback.Add(resetGateway)
 
 		return rollback.Do, nil
 	}
@@ -379,16 +388,21 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 
 	var tunWG sync.WaitGroup
 
-	tunWG.Add(1)
-	go func() {
-		tunneld(ctx, 4)
-		tunWG.Done()
-	}()
-	tunWG.Add(1)
-	go func() {
-		tunneld(ctx, 6)
-		tunWG.Done()
-	}()
+	if *tun4 {
+		tunWG.Add(1)
+		go func() {
+			tunneld(ctx, 4)
+			tunWG.Done()
+		}()
+	}
+
+	if *tun6 {
+		tunWG.Add(1)
+		go func() {
+			tunneld(ctx, 6)
+			tunWG.Done()
+		}()
+	}
 
 	tunWG.Wait()
 	if ctx.Err() == nil {
