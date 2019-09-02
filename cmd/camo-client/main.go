@@ -135,6 +135,7 @@ func main() {
 			conn, err := d.DialContext(ctx, network, addr)
 			if err == nil {
 				remoteAddr.Store(conn.RemoteAddr())
+				log.Infof("connection succeeded. remote: %s", conn.RemoteAddr())
 			}
 			return conn, err
 		},
