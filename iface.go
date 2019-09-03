@@ -2,9 +2,11 @@ package camo
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/linfn/camo/internal/util"
@@ -195,6 +197,8 @@ func setIfaceUp(dev string, mtu int) error {
 	switch runtime.GOOS {
 	case "darwin", "freebsd":
 		return setIfaceUpBSD(dev, mtu)
+	case "windows":
+		return setIfaceUpWindows(dev, mtu)
 	default:
 		return setIfaceUpIPRoute2(dev, mtu)
 	}
@@ -204,6 +208,8 @@ func addIfaceAddr(dev string, cidr string) error {
 	switch runtime.GOOS {
 	case "darwin", "freebsd":
 		return addIfaceAddrBSD(dev, cidr)
+	case "windows":
+		return addIfaceAddrWindows(dev, cidr)
 	default:
 		return addIfaceAddrIPRoute2(dev, cidr)
 	}
@@ -213,6 +219,8 @@ func delIfaceAddr(dev string, cidr string) error {
 	switch runtime.GOOS {
 	case "darwin", "freebsd":
 		return delIfaceAddrBSD(dev, cidr)
+	case "windows":
+		return delIfaceAddrWindows(dev, cidr)
 	default:
 		return delIfaceAddrIPRoute2(dev, cidr)
 	}
@@ -268,4 +276,37 @@ func delIfaceAddrBSD(dev string, cidr string) error {
 		family = "inet6"
 	}
 	return util.RunCmd("ifconfig", dev, family, cidr, "-alias")
+}
+
+func setIfaceUpWindows(dev string, mtu int) error {
+	args := fmt.Sprintf("interface ipv4 set subinterface %s mtu=%d", dev, mtu)
+	err1 := util.RunCmd("netsh", strings.Split(args, " ")...)
+	args = fmt.Sprintf("interface ipv6 set subinterface %s mtu=%d", dev, mtu)
+	err2 := util.RunCmd("netsh", strings.Split(args, " ")...)
+	if err1 != nil && err2 != nil {
+		return err1
+	}
+	return nil
+}
+
+func addIfaceAddrWindows(dev string, cidr string) error {
+	family := "ipv4"
+	if !util.IsIPv4(cidr) {
+		family = "ipv6"
+	}
+	args := fmt.Sprintf("interface %s add address %s address=%s", family, dev, cidr)
+	return util.RunCmd("netsh", strings.Split(args, " ")...)
+}
+
+func delIfaceAddrWindows(dev string, cidr string) error {
+	ip, _, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return err
+	}
+	family := "ipv4"
+	if ip.To4() == nil {
+		family = "ipv6"
+	}
+	args := fmt.Sprintf("interface %s delete address %s address=%s", family, dev, ip)
+	return util.RunCmd("netsh", strings.Split(args, " ")...)
 }

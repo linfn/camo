@@ -16,6 +16,8 @@ func GetRoute(dst string) (gateway string, dev string, err error) {
 	switch runtime.GOOS {
 	case "darwin", "freebsd":
 		return getRouteBSD(dst)
+	case "windows":
+		return getRouteWindows(dst)
 	default:
 		return getRouteIPRoute2(dst)
 	}
@@ -26,6 +28,8 @@ func AddRoute(dst string, gateway string, dev string) error {
 	switch runtime.GOOS {
 	case "darwin", "freebsd":
 		return addRouteBSD(dst, gateway, dev)
+	case "windows":
+		return addRouteWindows(dst, gateway, dev)
 	default:
 		return addRouteIPRoute2(dst, gateway, dev)
 	}
@@ -36,6 +40,8 @@ func DelRoute(dst string, gateway string, dev string) error {
 	switch runtime.GOOS {
 	case "darwin", "freebsd":
 		return delRouteBSD(dst, gateway, dev)
+	case "windows":
+		return delRouteWindows(dst, gateway, dev)
 	default:
 		return delRouteIPRoute2(dst, gateway, dev)
 	}
@@ -164,6 +170,28 @@ func delRouteBSD(dst string, gateway string, _ string) error {
 		family = "-inet6"
 	}
 	return util.RunCmd("route", "-n", "delete", "-net", family, dst, gateway)
+}
+
+func getRouteWindows(dst string) (gateway string, dev string, err error) {
+	return
+}
+
+func addRouteWindows(dst string, gateway string, dev string) error {
+	family := "ipv4"
+	if !util.IsIPv4(dst) {
+		family = "ipv6"
+	}
+	args := fmt.Sprintf("interface %s add route %s interface=%s nexthop=%s", family, dst, dev, gateway)
+	return util.RunCmd("netsh", strings.Split(args, " ")...)
+}
+
+func delRouteWindows(dst string, gateway string, dev string) error {
+	family := "ipv4"
+	if !util.IsIPv4(dst) {
+		family = "ipv6"
+	}
+	args := fmt.Sprintf("interface %s delete route %s interface=%s nexthop=%s", family, dst, dev, gateway)
+	return util.RunCmd("netsh", strings.Split(args, " ")...)
 }
 
 // SetupNAT ...
