@@ -290,7 +290,7 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 	openTunnel := func(ctx context.Context, ipVersion int) (func(context.Context) error, error) {
 		var err error
 
-		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 
 		var res *camo.IPResult
 		if ipVersion == 4 {
@@ -364,7 +364,6 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 			}
 			// TODO exponential backoff
 			time.Sleep(1 * time.Second)
-			c.FlushResolvedAddr()
 		}
 
 		if ctx.Err() == nil {

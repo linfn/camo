@@ -218,6 +218,7 @@ func (c *Client) serveTunnel(ctx context.Context, rw io.ReadWriteCloser, localIP
 }
 
 func (c *Client) newTransport() (ts http.RoundTripper) {
+	// TODO Need a timing to refresh the cached server address (if the DNS results changed)
 	var (
 		mu           sync.Mutex
 		resolvedAddr net.Addr
@@ -289,17 +290,6 @@ func (c *Client) httpClient() *http.Client {
 		Transport: c.newTransport(),
 	}
 	return c.hc
-}
-
-// FlushResolvedAddr ...
-func (c *Client) FlushResolvedAddr() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.hc != nil {
-		c.hc.CloseIdleConnections()
-		c.hc = nil
-	}
 }
 
 func (c *Client) url(path string) *url.URL {
