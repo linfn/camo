@@ -221,8 +221,8 @@ func getNoise() int {
 	return int(crc32.ChecksumIEEE([]byte(cid)))
 }
 
-func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP, net.IPMask) (func(), error) {
-	return func(tunIP net.IP, mask net.IPMask) (reset func(), err error) {
+func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP, net.IPMask, net.IP) (func(), error) {
+	return func(tunIP net.IP, mask net.IPMask, gateway net.IP) (reset func(), err error) {
 		var rollback camo.Rollback
 		defer func() {
 			if err != nil {
@@ -236,10 +236,10 @@ func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP, net.IPMask)
 		)
 		if tunIP.To4() != nil {
 			tunIPVer = 4
-			if err = iface.SetIPv4(cidr); err != nil {
+			if err = iface.SetIPv4(cidr, gateway); err != nil {
 				return nil, err
 			}
-			rollback.Add(func() { iface.SetIPv4("") })
+			rollback.Add(func() { iface.SetIPv4("", nil) })
 		} else {
 			tunIPVer = 6
 			if err = iface.SetIPv6(cidr); err != nil {
@@ -275,7 +275,7 @@ func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP, net.IPMask)
 				rollback.Add(func() { camo.DelRoute(srvIP, oldGateway, oldDev) })
 			}
 
-			resetGateway, err := camo.RedirectGateway(iface.Name(), tunIP.String())
+			resetGateway, err := camo.RedirectGateway(iface.Name(), gateway.String())
 			if err != nil {
 				return nil, err
 			}
@@ -308,6 +308,7 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 		var (
 			ip   = res.IP
 			mask = res.Mask
+			gw   = res.Gateway
 		)
 
 		tunnel, err := c.OpenTunnel(ctx, ip)
@@ -318,7 +319,7 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 
 		cancel()
 
-		reset, err := setupTunHandler(c, iface)(ip, mask)
+		reset, err := setupTunHandler(c, iface)(ip, mask, gw)
 		if err != nil {
 			tunnel(ctx) // use a canceled ctx to terminate the tunnel
 			return nil, fmt.Errorf("setup tunnel error: %v", err)
