@@ -223,6 +223,9 @@ func addIfaceAddrBSD(dev string, cidr string, peer string) error {
 		if err != nil {
 			return err
 		}
+		if peer == "" {
+			peer = ip.String()
+		}
 		return runCmd("ifconfig", dev, "inet", ip.String(), peer, "netmask", subnet.IP.String(), "alias")
 	}
 	return runCmd("ifconfig", dev, "inet6", cidr, "alias")
