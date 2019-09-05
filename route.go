@@ -181,8 +181,7 @@ func addRouteWindows(dst string, gateway string, dev string) error {
 	if !util.IsIPv4(dst) {
 		family = "ipv6"
 	}
-	args := fmt.Sprintf("interface %s add route %s interface=%s nexthop=%s", family, dst, dev, gateway)
-	return util.RunCmd("netsh", strings.Split(args, " ")...)
+	return util.RunCmd("netsh", "interface", family, "add", "route", dst, fmt.Sprintf("interface=%s", dev), fmt.Sprintf("nexthop=%s", gateway), "metric=2", "store=active")
 }
 
 func delRouteWindows(dst string, gateway string, dev string) error {
@@ -190,8 +189,7 @@ func delRouteWindows(dst string, gateway string, dev string) error {
 	if !util.IsIPv4(dst) {
 		family = "ipv6"
 	}
-	args := fmt.Sprintf("interface %s delete route %s interface=%s nexthop=%s", family, dst, dev, gateway)
-	return util.RunCmd("netsh", strings.Split(args, " ")...)
+	return util.RunCmd("netsh", "interface", family, "delete", "route", dst, fmt.Sprintf("interface=%s", dev), fmt.Sprintf("nexthop=%s", gateway), "store=active")
 }
 
 // SetupNAT ...
@@ -236,17 +234,25 @@ func RedirectGateway(dev string, gateway string) (reset func() error, err error)
 	}
 
 	if util.IsIPv4(gateway) {
-		add("0.0.0.0/1", gateway, dev)
-		add("128.0.0.0/1", gateway, dev)
+		if runtime.GOOS == "windows" {
+			add("0.0.0.0/0", gateway, dev)
+		} else {
+			add("0.0.0.0/1", gateway, dev)
+			add("128.0.0.0/1", gateway, dev)
+		}
 	} else {
-		add("::/3", gateway, dev)
+		if runtime.GOOS == "windows" {
+			add("::/0", gateway, dev)
+		} else {
+			add("::/3", gateway, dev)
 
-		// Global Unicast
-		add("2000::/4", gateway, dev)
-		add("3000::/4", gateway, dev)
+			// Global Unicast
+			add("2000::/4", gateway, dev)
+			add("3000::/4", gateway, dev)
 
-		// Unique Local Unicast
-		add("fc00::/7", gateway, dev)
+			// Unique Local Unicast
+			add("fc00::/7", gateway, dev)
+		}
 	}
 
 	if err != nil {

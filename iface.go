@@ -6,7 +6,6 @@ import (
 	"net"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/linfn/camo/internal/util"
@@ -31,7 +30,7 @@ type Iface struct {
 
 // NewTunIface ...
 func NewTunIface(mtu int) (*Iface, error) {
-	iface, err := water.New(water.Config{DeviceType: water.TUN})
+	iface, err := createTun()
 	if err != nil {
 		return nil, err
 	}
@@ -72,6 +71,12 @@ func (i *Iface) SetIPv4(cidr string) error {
 	err = addIfaceAddr(i.Name(), cidr)
 	if err != nil {
 		return err
+	}
+	if runtime.GOOS == "windows" {
+		err = windowsTUNControlIP4(i.Interface, cidr)
+		if err != nil {
+			return nil
+		}
 	}
 	i.ipv4 = ip
 	i.subnet4 = subnet
@@ -279,10 +284,10 @@ func delIfaceAddrBSD(dev string, cidr string) error {
 }
 
 func setIfaceUpWindows(dev string, mtu int) error {
-	args := fmt.Sprintf("interface ipv4 set subinterface %s mtu=%d", dev, mtu)
-	err1 := util.RunCmd("netsh", strings.Split(args, " ")...)
-	args = fmt.Sprintf("interface ipv6 set subinterface %s mtu=%d", dev, mtu)
-	err2 := util.RunCmd("netsh", strings.Split(args, " ")...)
+	args := []string{"interface", "ipv4", "set", "subinterface", dev, fmt.Sprintf("mtu=%d", mtu), "store=active"}
+	err1 := util.RunCmd("netsh", args...)
+	args = []string{"interface", "ipv6", "set", "subinterface", dev, fmt.Sprintf("mtu=%d", mtu), "store=active"}
+	err2 := util.RunCmd("netsh", args...)
 	if err1 != nil && err2 != nil {
 		return err1
 	}
@@ -294,8 +299,8 @@ func addIfaceAddrWindows(dev string, cidr string) error {
 	if !util.IsIPv4(cidr) {
 		family = "ipv6"
 	}
-	args := fmt.Sprintf("interface %s add address %s address=%s", family, dev, cidr)
-	return util.RunCmd("netsh", strings.Split(args, " ")...)
+	// "gateway=10.20.0.1", "gwmetric=2",
+	return util.RunCmd("netsh", "interface", family, "add", "address", dev, fmt.Sprintf("address=%s", cidr), "store=active")
 }
 
 func delIfaceAddrWindows(dev string, cidr string) error {
@@ -307,6 +312,6 @@ func delIfaceAddrWindows(dev string, cidr string) error {
 	if ip.To4() == nil {
 		family = "ipv6"
 	}
-	args := fmt.Sprintf("interface %s delete address %s address=%s", family, dev, ip)
-	return util.RunCmd("netsh", strings.Split(args, " ")...)
+	// "gateway=10.20.0.1",
+	return util.RunCmd("netsh", "interface", family, "delete", "address", dev, fmt.Sprintf("address=%s", ip), "store=active")
 }
