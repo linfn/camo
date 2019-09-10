@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"expvar"
 	"flag"
@@ -40,6 +41,7 @@ var (
 	enableNAT     = envflag.Bool("nat", "CAMO_NAT", false, "enable NAT for IPv4 and IPv6")
 	enableNAT4    = envflag.Bool("nat4", "CAMO_NAT4", false, "enable NAT for IPv4")
 	enableNAT6    = envflag.Bool("nat6", "CAMO_NAT6", false, "enable NAT for IPv6")
+	usePSK        = envflag.Bool("psk", "CAMO_PSK", false, "Use TLS 1.3 PSK mode. In this mode, the server does not need a domain name and certificate.")
 	autocertHost  = envflag.String("autocert-host", "CAMO_AUTOCERT_HOST", "", "hostname")
 	autocertDir   = envflag.String("autocert-dir", "CAMO_AUTOCERT_DIR", defaultCertDir, "cert cache directory")
 	autocertEmail = envflag.String("autocert-email", "CAMO_AUTOCERT_EMAIL", "", "(optional) email address")
@@ -90,8 +92,21 @@ func init() {
 		}
 	}
 
-	if !*useH2C && *autocertHost == "" {
-		log.Fatal("missing autocert-host")
+	if *usePSK {
+		if *useH2C {
+			log.Fatal("cannot use both psk mode and h2c mode")
+		}
+		if *autocertHost != "" {
+			log.Fatal("can not use both psk mode and autocert mode")
+		}
+	} else if *useH2C {
+		if *autocertHost != "" {
+			log.Fatal("can not use both h2c mode and autocert mode")
+		}
+	} else {
+		if *autocertHost == "" {
+			log.Fatal("missing autocert-host")
+		}
 	}
 }
 
@@ -268,6 +283,20 @@ func initHTTPServer(handler http.Handler) *http.Server {
 }
 
 func initTLSConfig() *tls.Config {
+	var tlsCfg *tls.Config
+	if *usePSK {
+		tlsCfg = initTLSPSKMode()
+	} else {
+		tlsCfg = initTLSAutoCertMode()
+	}
+	return tlsCfg
+}
+
+func initTLSPSKMode() *tls.Config {
+	return camo.TLSPSKServerConfig(sha256.Sum256([]byte(*password)))
+}
+
+func initTLSAutoCertMode() *tls.Config {
 	certMgr := autocert.Manager{
 		Prompt:     autocert.AcceptTOS,
 		Cache:      autocert.DirCache(*autocertDir),
