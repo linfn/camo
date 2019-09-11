@@ -59,21 +59,16 @@ func generateCert(host string) (*tls.Certificate, error) {
 	return &tlsCert, nil
 }
 
-// TLSPSKSessionCache ...
-func TLSPSKSessionCache(host string, sessionTicketKey [32]byte) (tls.ClientSessionCache, error) {
+func newPSKSession(host string, sessionTicketKey [32]byte) (*tls.ClientSessionState, error) {
 	cert, err := generateCert(host)
 	if err != nil {
 		return nil, err
 	}
 
-	srvTLSCfg := &tls.Config{
+	l, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
 		SessionTicketKey: sessionTicketKey,
-		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return cert, nil
-		},
-	}
-
-	l, err := tls.Listen("tcp", "127.0.0.1:0", srvTLSCfg)
+		Certificates:     []tls.Certificate{*cert},
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +94,7 @@ func TLSPSKSessionCache(host string, sessionTicketKey [32]byte) (tls.ClientSessi
 				ServerName:         host,
 				RootCAs:            certpool,
 				ClientSessionCache: sessionCache,
+				MinVersion:         tls.VersionTLS13,
 			},
 		},
 	}
@@ -109,7 +105,53 @@ func TLSPSKSessionCache(host string, sessionTicketKey [32]byte) (tls.ClientSessi
 	}
 	resp.Body.Close()
 
-	return sessionCache, nil
+	session, ok := sessionCache.Get(host)
+	if !ok {
+		return nil, errors.New("can not get session")
+	}
+
+	return session, nil
+}
+
+type pskSessionCache struct {
+	host             string
+	sessionTicketKey [32]byte
+	cs               tls.ClientSessionCache
+}
+
+func (p *pskSessionCache) Get(sessionKey string) (session *tls.ClientSessionState, ok bool) {
+	session, ok = p.cs.Get(sessionKey)
+	if ok {
+		return session, true
+	}
+	if sessionKey != p.host {
+		return nil, false
+	}
+	session, err := newPSKSession(p.host, p.sessionTicketKey)
+	if err != nil {
+		return nil, false
+	}
+	p.Put(p.host, session)
+	return session, true
+}
+
+func (p *pskSessionCache) Put(sessionKey string, cs *tls.ClientSessionState) {
+	p.cs.Put(sessionKey, cs)
+}
+
+// TLSPSKSessionCache ...
+func TLSPSKSessionCache(host string, sessionTicketKey [32]byte) (tls.ClientSessionCache, error) {
+	session, err := newPSKSession(host, sessionTicketKey)
+	if err != nil {
+		return nil, err
+	}
+	p := pskSessionCache{
+		host:             host,
+		sessionTicketKey: sessionTicketKey,
+		cs:               tls.NewLRUClientSessionCache(0),
+	}
+	p.Put(host, session)
+	return &p, nil
 }
 
 // TLSPSKClientConfig ...

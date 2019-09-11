@@ -2,7 +2,6 @@ package camo
 
 import (
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"net/http"
 	"testing"
@@ -14,12 +13,7 @@ func TestTLSPSK(t *testing.T) {
 		sessionTicketKey = [32]byte{1}
 	)
 
-	l, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
-		SessionTicketKey: sessionTicketKey,
-		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return nil, errors.New("(PSK) bad certificate")
-		},
-	})
+	l, err := tls.Listen("tcp", "127.0.0.1:0", TLSPSKServerConfig(sessionTicketKey))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,13 +37,17 @@ func TestTLSPSK(t *testing.T) {
 		},
 	}
 
-	resp, err := c.Get("https://" + l.Addr().String())
-	if err != nil {
-		t.Error(err)
+	for i := 0; i < 2; i++ {
+		resp, err := c.Get("https://" + l.Addr().String())
+		if err != nil {
+			t.Error(i, err)
+		}
+		resp.Body.Close()
 	}
-	resp.Body.Close()
 
-	resp, err = c.Get("https://" + l.Addr().String())
+	tlsCfg.ClientSessionCache.Put(host, nil)
+
+	resp, err := c.Get("https://" + l.Addr().String())
 	if err != nil {
 		t.Error(err)
 	}
