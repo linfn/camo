@@ -1,8 +1,10 @@
 package camo
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -139,8 +141,8 @@ func (p *pskSessionCache) Put(sessionKey string, cs *tls.ClientSessionState) {
 	p.cs.Put(sessionKey, cs)
 }
 
-// TLSPSKSessionCache ...
-func TLSPSKSessionCache(host string, sessionTicketKey [32]byte) (tls.ClientSessionCache, error) {
+// NewTLSPSKSessionCache ...
+func NewTLSPSKSessionCache(host string, sessionTicketKey [32]byte) (tls.ClientSessionCache, error) {
 	session, err := newPSKSession(host, sessionTicketKey)
 	if err != nil {
 		return nil, err
@@ -154,24 +156,10 @@ func TLSPSKSessionCache(host string, sessionTicketKey [32]byte) (tls.ClientSessi
 	return &p, nil
 }
 
-// TLSPSKClientConfig ...
-func TLSPSKClientConfig(host string, sessionTicketKey [32]byte) (*tls.Config, error) {
-	sc, err := TLSPSKSessionCache(host, sessionTicketKey)
-	if err != nil {
-		return nil, err
-	}
-	return &tls.Config{
-		ServerName:         host,
-		ClientSessionCache: sc,
-	}, nil
-}
-
-// TLSPSKServerConfig ...
-func TLSPSKServerConfig(sessionTicketKey [32]byte) *tls.Config {
-	return &tls.Config{
-		SessionTicketKey: sessionTicketKey,
-		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return nil, errors.New("(PSK) bad certificate")
-		},
-	}
+// NewSessionTicketKey ...
+func NewSessionTicketKey(password string) (key [32]byte) {
+	m := hmac.New(sha256.New, []byte(password))
+	m.Write([]byte("camo-tls-psk"))
+	m.Sum(key[:0])
+	return
 }

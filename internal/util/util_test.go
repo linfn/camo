@@ -54,6 +54,27 @@ func TestGetHostPortAddr(t *testing.T) {
 	}
 }
 
+func TestStripPort(t *testing.T) {
+	type args struct {
+		addr string
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{"host with port", args{"localhost:443"}, "localhost"},
+		{"host without port", args{"localhost"}, "localhost"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := StripPort(tt.args.addr); got != tt.want {
+				t.Errorf("StripPort() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsIPv4(t *testing.T) {
 	type args struct {
 		ip string

@@ -2,18 +2,26 @@ package camo
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net/http"
 	"testing"
+
+	"github.com/linfn/camo/internal/util"
 )
 
 func TestTLSPSK(t *testing.T) {
 	var (
-		host             = "google.com"
-		sessionTicketKey = [32]byte{1}
+		host     = "google.com"
+		password = "camotest"
 	)
 
-	l, err := tls.Listen("tcp", "127.0.0.1:0", TLSPSKServerConfig(sessionTicketKey))
+	l, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		SessionTicketKey: NewSessionTicketKey(password),
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return nil, errors.New("(PSK) bad certificate")
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,14 +34,16 @@ func TestTLSPSK(t *testing.T) {
 	go srv.Serve(l)
 	defer srv.Close()
 
-	tlsCfg, err := TLSPSKClientConfig(host, sessionTicketKey)
+	cs, err := NewTLSPSKSessionCache(util.StripPort(host), NewSessionTicketKey(password))
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	c := &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: tlsCfg,
+			TLSClientConfig: &tls.Config{
+				ServerName:         util.StripPort(host),
+				ClientSessionCache: cs,
+			},
 		},
 	}
 
@@ -41,15 +51,17 @@ func TestTLSPSK(t *testing.T) {
 		resp, err := c.Get("https://" + l.Addr().String())
 		if err != nil {
 			t.Error(i, err)
+		} else {
+			resp.Body.Close()
 		}
-		resp.Body.Close()
 	}
 
-	tlsCfg.ClientSessionCache.Put(host, nil)
+	cs.Put(util.StripPort(host), nil)
 
 	resp, err := c.Get("https://" + l.Addr().String())
 	if err != nil {
 		t.Error(err)
+	} else {
+		resp.Body.Close()
 	}
-	resp.Body.Close()
 }

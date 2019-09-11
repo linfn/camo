@@ -195,22 +195,18 @@ func ensureCID(host string) string {
 }
 
 func initTLSConfig() *tls.Config {
-	var tlsCfg *tls.Config
+	tlsCfg := new(tls.Config)
+	tlsCfg.ServerName = util.StripPort(host)
 	if *usePSK {
-		tlsCfg = initTLSPSK()
+		cs, err := camo.NewTLSPSKSessionCache(tlsCfg.ServerName, camo.NewSessionTicketKey(*password))
+		if err != nil {
+			log.Panicf("failed to init TLS PSK session: %v", err)
+		}
+		tlsCfg.ClientSessionCache = cs
 	} else {
-		tlsCfg = new(tls.Config)
 		tlsCfg.ClientSessionCache = tls.NewLRUClientSessionCache(0)
 	}
 	return tlsCfg
-}
-
-func initTLSPSK() *tls.Config {
-	cfg, err := camo.TLSPSKClientConfig(host, sha256.Sum256([]byte(*password)))
-	if err != nil {
-		log.Panicf("failed to init TLS PSK config: %v", err)
-	}
-	return cfg
 }
 
 func getNoise() int {
