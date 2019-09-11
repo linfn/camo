@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/linfn/camo/internal/util"
 )
 
 const (
@@ -292,7 +294,7 @@ type IPResult struct {
 }
 
 func (r *IPResult) String() string {
-	return fmt.Sprintf("ip=%s ttl=%d gw=%s", ToCIDR(r.IP, r.Mask), r.TTL, r.Gateway)
+	return fmt.Sprintf("ip=%s ttl=%d gw=%s", util.ToCIDR(r.IP, r.Mask), r.TTL, r.Gateway)
 }
 
 func (s *Server) assignIPLocked(cid string, cidSession map[string]*session, ipPool IPPool) (*IPResult, error) {
@@ -409,7 +411,7 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 			}
 
 			if !srcIP.Equal(ss.ip) {
-				log.Warnf("tunnel drop packet from %s: src %s mismatched", ss.ip, srcIP)
+				log.Tracef("tunnel drop packet from %s: src %s mismatched", ss.ip, srcIP)
 				return
 			}
 

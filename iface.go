@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/linfn/camo/internal/util"
 	"github.com/songgao/water"
 )
 
@@ -97,7 +98,7 @@ func (i *Iface) delIPv4() error {
 	if i.ipv4 == nil {
 		return nil
 	}
-	err := delIfaceAddr(i.Name(), ToCIDR(i.ipv4, i.subnet4.Mask))
+	err := delIfaceAddr(i.Name(), util.ToCIDR(i.ipv4, i.subnet4.Mask))
 	if err != nil {
 		return err
 	}
@@ -110,7 +111,7 @@ func (i *Iface) delIPv6() error {
 	if i.ipv6 == nil {
 		return nil
 	}
-	err := delIfaceAddr(i.Name(), ToCIDR(i.ipv6, i.subnet6.Mask))
+	err := delIfaceAddr(i.Name(), util.ToCIDR(i.ipv6, i.subnet6.Mask))
 	if err != nil {
 		return err
 	}
@@ -121,12 +122,12 @@ func (i *Iface) delIPv6() error {
 
 // CIDR4 ...
 func (i *Iface) CIDR4() string {
-	return ToCIDR(i.ipv4, i.subnet4.Mask)
+	return util.ToCIDR(i.ipv4, i.subnet4.Mask)
 }
 
 // CIDR6 ...
 func (i *Iface) CIDR6() string {
-	return ToCIDR(i.ipv6, i.subnet6.Mask)
+	return util.ToCIDR(i.ipv6, i.subnet6.Mask)
 }
 
 // IPv4 ...
@@ -189,23 +190,23 @@ func setIfaceUpIPRoute2(dev string, mtu int) error {
 	if mtu != 0 {
 		args = append(args, "mtu", strconv.Itoa(mtu))
 	}
-	return runCmd("ip", args...)
+	return util.RunCmd("ip", args...)
 }
 
 func addIfaceAddrIPRoute2(dev string, cidr string) error {
 	family := "-4"
-	if !IsIPv4(cidr) {
+	if !util.IsIPv4(cidr) {
 		family = "-6"
 	}
-	return runCmd("ip", family, "address", "add", cidr, "dev", dev)
+	return util.RunCmd("ip", family, "address", "add", cidr, "dev", dev)
 }
 
 func delIfaceAddrIPRoute2(dev string, cidr string) error {
 	family := "-4"
-	if !IsIPv4(cidr) {
+	if !util.IsIPv4(cidr) {
 		family = "-6"
 	}
-	return runCmd("ip", family, "address", "del", cidr, "dev", dev)
+	return util.RunCmd("ip", family, "address", "del", cidr, "dev", dev)
 }
 
 func setIfaceUpBSD(dev string, mtu int) error {
@@ -214,11 +215,11 @@ func setIfaceUpBSD(dev string, mtu int) error {
 		args = append(args, "mtu", strconv.Itoa(mtu))
 	}
 	args = append(args, "up")
-	return runCmd("ifconfig", args...)
+	return util.RunCmd("ifconfig", args...)
 }
 
 func addIfaceAddrBSD(dev string, cidr string, peer string) error {
-	if IsIPv4(cidr) {
+	if util.IsIPv4(cidr) {
 		ip, subnet, err := net.ParseCIDR(cidr)
 		if err != nil {
 			return err
@@ -226,15 +227,15 @@ func addIfaceAddrBSD(dev string, cidr string, peer string) error {
 		if peer == "" {
 			peer = ip.String()
 		}
-		return runCmd("ifconfig", dev, "inet", ip.String(), peer, "netmask", subnet.IP.String(), "alias")
+		return util.RunCmd("ifconfig", dev, "inet", ip.String(), peer, "netmask", subnet.IP.String(), "alias")
 	}
-	return runCmd("ifconfig", dev, "inet6", cidr, "alias")
+	return util.RunCmd("ifconfig", dev, "inet6", cidr, "alias")
 }
 
 func delIfaceAddrBSD(dev string, cidr string) error {
 	family := "inet"
-	if !IsIPv4(cidr) {
+	if !util.IsIPv4(cidr) {
 		family = "inet6"
 	}
-	return runCmd("ifconfig", dev, family, cidr, "-alias")
+	return util.RunCmd("ifconfig", dev, family, cidr, "-alias")
 }

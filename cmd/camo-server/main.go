@@ -22,6 +22,7 @@ import (
 	"github.com/linfn/camo"
 	"github.com/linfn/camo/internal/envflag"
 	"github.com/linfn/camo/internal/machineid"
+	"github.com/linfn/camo/internal/util"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -100,7 +101,7 @@ func main() {
 		return
 	}
 
-	var defers camo.Rollback
+	var defers util.Rollback
 	defer defers.Do()
 
 	iface := initTun(&defers)
@@ -175,7 +176,7 @@ func initLog() {
 	log = camo.NewLogger(stdlog.New(os.Stderr, "", stdlog.LstdFlags|stdlog.Llongfile), logLevel)
 }
 
-func initTun(defers *camo.Rollback) *camo.Iface {
+func initTun(defers *util.Rollback) *camo.Iface {
 	iface, err := camo.NewTun(*mtu)
 	if err != nil {
 		log.Panicf("failed to create tun device: %v", err)

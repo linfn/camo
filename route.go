@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+
+	"github.com/linfn/camo/internal/util"
 )
 
 // GetRoute ...
@@ -41,10 +43,10 @@ func DelRoute(dst string, gateway string, dev string) error {
 
 func getRouteIPRoute2(dst string) (gateway string, dev string, err error) {
 	family := "-4"
-	if !IsIPv4(dst) {
+	if !util.IsIPv4(dst) {
 		family = "-6"
 	}
-	b, err := runCmdOutput("ip", family, "route", "get", dst)
+	b, err := util.RunCmdOutput("ip", family, "route", "get", dst)
 	if err != nil {
 		return
 	}
@@ -81,7 +83,7 @@ func getRouteIPRoute2(dst string) (gateway string, dev string, err error) {
 
 func addRouteIPRoute2(dst string, gateway string, dev string) error {
 	family := "-4"
-	if !IsIPv4(dst) {
+	if !util.IsIPv4(dst) {
 		family = "-6"
 	}
 	args := []string{family, "route", "add", dst}
@@ -91,12 +93,12 @@ func addRouteIPRoute2(dst string, gateway string, dev string) error {
 	if dev != "" {
 		args = append(args, "dev", dev)
 	}
-	return runCmd("ip", args...)
+	return util.RunCmd("ip", args...)
 }
 
 func delRouteIPRoute2(dst string, gateway string, dev string) error {
 	family := "-4"
-	if !IsIPv4(dst) {
+	if !util.IsIPv4(dst) {
 		family = "-6"
 	}
 	args := []string{family, "route", "del", dst}
@@ -106,15 +108,15 @@ func delRouteIPRoute2(dst string, gateway string, dev string) error {
 	if dev != "" {
 		args = append(args, "dev", dev)
 	}
-	return runCmd("ip", args...)
+	return util.RunCmd("ip", args...)
 }
 
 func getRouteBSD(dst string) (gateway string, dev string, err error) {
 	family := "-inet"
-	if !IsIPv4(dst) {
+	if !util.IsIPv4(dst) {
 		family = "-inet6"
 	}
-	b, err := runCmdOutput("route", "-n", "get", family, dst)
+	b, err := util.RunCmdOutput("route", "-n", "get", family, dst)
 	if err != nil {
 		return
 	}
@@ -150,38 +152,38 @@ func getRouteBSD(dst string) (gateway string, dev string, err error) {
 func addRouteBSD(dst string, gateway string, _ string) error {
 	// If the destination is directly reachable via an interface, the -interface modifier should be specified.
 	family := "-inet"
-	if !IsIPv4(dst) {
+	if !util.IsIPv4(dst) {
 		family = "-inet6"
 	}
-	return runCmd("route", "-n", "add", "-net", family, dst, gateway)
+	return util.RunCmd("route", "-n", "add", "-net", family, dst, gateway)
 }
 
 func delRouteBSD(dst string, gateway string, _ string) error {
 	family := "-inet"
-	if !IsIPv4(dst) {
+	if !util.IsIPv4(dst) {
 		family = "-inet6"
 	}
-	return runCmd("route", "-n", "delete", "-net", family, dst, gateway)
+	return util.RunCmd("route", "-n", "delete", "-net", family, dst, gateway)
 }
 
 // SetupNAT ...
 func SetupNAT(src string) (cancel func(), err error) {
 	cmd := "iptables"
-	if !IsIPv4(src) {
+	if !util.IsIPv4(src) {
 		cmd = "ip6tables"
 	}
-	err = runCmd(cmd, "-t", "nat", "-A", "POSTROUTING", "-s", src, "-j", "MASQUERADE")
+	err = util.RunCmd(cmd, "-t", "nat", "-A", "POSTROUTING", "-s", src, "-j", "MASQUERADE")
 	if err != nil {
 		return nil, err
 	}
 	return func() {
-		runCmd(cmd, "-t", "nat", "-D", "POSTROUTING", "-s", src, "-j", "MASQUERADE")
+		util.RunCmd(cmd, "-t", "nat", "-D", "POSTROUTING", "-s", src, "-j", "MASQUERADE")
 	}, nil
 }
 
 // RedirectGateway 参考 https://www.tinc-vpn.org/examples/redirect-gateway/
 func RedirectGateway(dev string, gateway string) (reset func(), err error) {
-	var rollback Rollback
+	var rollback util.Rollback
 	defer func() {
 		if err != nil {
 			rollback.Do()
@@ -200,7 +202,7 @@ func RedirectGateway(dev string, gateway string) (reset func(), err error) {
 		return
 	}
 
-	if IsIPv4(gateway) {
+	if util.IsIPv4(gateway) {
 		add("0.0.0.0/1", gateway, dev)
 		add("128.0.0.0/1", gateway, dev)
 	} else {

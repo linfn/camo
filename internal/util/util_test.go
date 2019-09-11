@@ -1,4 +1,4 @@
-package camo
+package util
 
 import (
 	"net"

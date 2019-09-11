@@ -26,6 +26,7 @@ import (
 	"github.com/linfn/camo"
 	"github.com/linfn/camo/internal/envflag"
 	"github.com/linfn/camo/internal/machineid"
+	"github.com/linfn/camo/internal/util"
 )
 
 var camoDir = getCamoDir()
@@ -83,7 +84,7 @@ func init() {
 	}
 
 	if *resolve != "" {
-		addr, err := camo.GetHostPortAddr(*resolve, "443")
+		addr, err := util.GetHostPortAddr(*resolve, "443")
 		if err != nil {
 			log.Fatalf("resolve addr %s error: %v", *resolve, err)
 		}
@@ -192,7 +193,7 @@ func getNoise() int {
 
 func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP, net.IPMask, net.IP) (func(), error) {
 	return func(tunIP net.IP, mask net.IPMask, gateway net.IP) (reset func(), err error) {
-		var rollback camo.Rollback
+		var rollback util.Rollback
 		defer func() {
 			if err != nil {
 				rollback.Do()
@@ -200,7 +201,7 @@ func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP, net.IPMask,
 		}()
 
 		var (
-			cidr     = camo.ToCIDR(tunIP, mask)
+			cidr     = util.ToCIDR(tunIP, mask)
 			tunIPVer int
 		)
 		if tunIP.To4() != nil {
@@ -229,7 +230,7 @@ func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP, net.IPMask,
 				return nil, fmt.Errorf("failed to get server ip: %v (%s)", err, srvAddr)
 			}
 			srvIPVer := 4
-			if !camo.IsIPv4(srvIP) {
+			if !util.IsIPv4(srvIP) {
 				srvIPVer = 6
 			}
 			if srvIPVer == tunIPVer {

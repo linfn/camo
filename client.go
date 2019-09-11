@@ -254,7 +254,6 @@ func (c *Client) newTransport() (ts http.RoundTripper) {
 			}
 
 			if !c.UseH2C {
-				// http2: Transport.dialTLSDefault
 				cn := tls.Client(conn, cfg)
 				if err := cn.Handshake(); err != nil {
 					return nil, err

@@ -1,5 +1,5 @@
-camo-client
-camo-server
+/camo-client
+/camo-server
 .env
 .certs
 *coverage.txt

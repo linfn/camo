@@ -1,4 +1,4 @@
-package camo
+package util
 
 import (
 	"fmt"
@@ -17,7 +17,8 @@ func cmdError(err error, name string, args []string) error {
 	return fmt.Errorf("%s. cmdline: %s %s", emsg, name, strings.Join(args, " "))
 }
 
-func runCmd(name string, arg ...string) error {
+// RunCmd ...
+func RunCmd(name string, arg ...string) error {
 	_, err := exec.Command(name, arg...).Output()
 	if err != nil {
 		return cmdError(err, name, arg)
@@ -25,7 +26,8 @@ func runCmd(name string, arg ...string) error {
 	return nil
 }
 
-func runCmdOutput(name string, arg ...string) ([]byte, error) {
+// RunCmdOutput ...
+func RunCmdOutput(name string, arg ...string) ([]byte, error) {
 	out, err := exec.Command(name, arg...).Output()
 	if err != nil {
 		return nil, cmdError(err, name, arg)
