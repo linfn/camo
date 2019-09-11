@@ -279,6 +279,7 @@ func initHTTPServer(handler http.Handler) *http.Server {
 
 func initTLSConfig() *tls.Config {
 	tlsCfg := new(tls.Config)
+	tlsCfg.MinVersion = tls.VersionTLS12
 	tlsCfg.NextProtos = []string{"h2", "http/1.1"}
 
 	if *usePSK {
