@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -11,22 +10,22 @@ import (
 	"flag"
 	"fmt"
 	"hash/crc32"
-	"io/ioutil"
 	stdlog "log"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"path"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/denisbrodbeck/machineid"
 	"github.com/linfn/camo"
 	"github.com/linfn/camo/internal/envflag"
+	"github.com/linfn/camo/internal/machineid"
 )
 
 var camoDir = getCamoDir()
@@ -172,47 +171,17 @@ func initLog() {
 func getCamoDir() string {
 	dir, err := os.UserCacheDir()
 	if err == nil {
-		return dir + "/camo"
+		return path.Join(dir, "camo")
 	}
 	return ".camo"
 }
 
-func ensureCamoDir() {
-	err := os.MkdirAll(camoDir, os.ModePerm)
-	if err != nil {
-		log.Panicf("failed to create camo dir. path: %s, error: %v", camoDir, err)
-	}
-}
-
 func ensureCID(host string) string {
-	id, err := machineid.ProtectedID("camo@" + host)
-	if err == nil {
-		return id
+	mid, err := machineid.MachineID(camoDir)
+	if err != nil {
+		log.Fatal(err)
 	}
-	log.Warnf("failed to get protected machineid: %v", err)
-
-	cidFile := camoDir + "/cid"
-
-	b, err := ioutil.ReadFile(cidFile)
-	if err != nil && !os.IsNotExist(err) {
-		log.Fatalf("failed to read cid file. path: %s, error: %v", cidFile, err)
-	}
-	if len(b) == 0 {
-		b = make([]byte, 32)
-		if _, err = rand.Read(b); err != nil {
-			log.Fatalf("failed to generate rand: %v", err)
-		}
-		ensureCamoDir()
-		err = ioutil.WriteFile(cidFile, b, os.ModePerm)
-		if err != nil {
-			log.Fatalf("failed to save cid file. path: %s, error: %v", cidFile, err)
-		}
-		log.Debugf("cid file saved. path: %s", cidFile)
-	}
-
-	log.Debugf("load cid from %s", cidFile)
-
-	mac := hmac.New(sha256.New, b)
+	mac := hmac.New(sha256.New, []byte(mid))
 	mac.Write([]byte("camo@" + host))
 	return hex.EncodeToString(mac.Sum(nil))
 }

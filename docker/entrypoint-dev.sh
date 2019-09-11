@@ -2,10 +2,6 @@
 
 set -e
 
-if [ ! -f /var/lib/dbus/machine-id ]; then
-    dbus-uuidgen > /var/lib/dbus/machine-id
-fi
-
 go get -v ./...
 
 # allexport
@@ -33,4 +29,4 @@ if [ "$CAMO_ENABLE_IP6" != true ]; then
     CAMO_TUN_IP6=
 fi
 
-exec camo-server
+exec camo-server $*

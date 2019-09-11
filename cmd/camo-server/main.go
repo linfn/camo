@@ -13,20 +13,21 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"path"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/denisbrodbeck/machineid"
 	"github.com/linfn/camo"
 	"github.com/linfn/camo/internal/envflag"
+	"github.com/linfn/camo/internal/machineid"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
 
-var defaultCertDir = getCamoDir() + "/certs"
+var defaultCertDir = path.Join(getCamoDir(), "certs")
 
 var (
 	help          = flag.Bool("help", false, "help")
@@ -161,7 +162,7 @@ func main() {
 func getCamoDir() string {
 	dir, err := os.UserCacheDir()
 	if err == nil {
-		return dir + "/camo"
+		return path.Join(dir, "camo")
 	}
 	return ".camo"
 }
@@ -246,11 +247,11 @@ func initIPPool(srv *camo.Server) {
 }
 
 func getNoise() int {
-	id, err := machineid.ProtectedID("camo")
+	id, err := machineid.MachineID(getCamoDir())
 	if err == nil {
 		return int(crc32.ChecksumIEEE([]byte(id)))
 	}
-	log.Warnf("failed to get protected machineid: %v", err)
+	log.Warnf("failed to get machineid: %v", err)
 	return rand.New(rand.NewSource(time.Now().UnixNano())).Int()
 }
 

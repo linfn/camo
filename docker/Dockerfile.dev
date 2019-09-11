@@ -1,6 +1,6 @@
 FROM golang:alpine
 
-RUN apk add --no-cache git iproute2 iptables ip6tables ca-certificates dbus
+RUN apk add --no-cache git iproute2 iptables ip6tables ca-certificates
 
 WORKDIR /camo
 

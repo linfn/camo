@@ -10,7 +10,7 @@ RUN go build ./cmd/camo-server
 
 FROM alpine
 
-RUN apk add --no-cache iproute2 iptables ip6tables ca-certificates dbus
+RUN apk add --no-cache iproute2 iptables ip6tables ca-certificates
 
 WORKDIR /camo
 
