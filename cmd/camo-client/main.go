@@ -200,6 +200,7 @@ func initTLSConfig() *tls.Config {
 		tlsCfg = initTLSPSK()
 	} else {
 		tlsCfg = new(tls.Config)
+		tlsCfg.ClientSessionCache = tls.NewLRUClientSessionCache(0)
 	}
 	return tlsCfg
 }
