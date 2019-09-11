@@ -20,6 +20,7 @@ import (
 
 	"github.com/denisbrodbeck/machineid"
 	"github.com/linfn/camo"
+	"github.com/linfn/camo/internal/envflag"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -29,19 +30,20 @@ var defaultCertDir = getCamoDir() + "/certs"
 
 var (
 	help          = flag.Bool("help", false, "help")
-	listenAddr    = flag.String("listen", ":443", "listen address")
-	password      = flag.String("password", "", "Set a password. It is recommended to use the environment variable CAMO_PASSWORD to set the password.")
-	mtu           = flag.Int("mtu", camo.DefaultMTU, "tun mtu")
-	tunIPv4       = flag.String("tun-ip4", "", "tun ipv4 cidr")
-	tunIPv6       = flag.String("tun-ip6", "", "tun ipv6 cidr")
-	enableNAT4    = flag.Bool("nat4", false, "enable NAT for IPv4")
-	enableNAT6    = flag.Bool("nat6", false, "enable NAT for IPv6")
-	autocertHost  = flag.String("autocert-host", "", "hostname")
-	autocertDir   = flag.String("autocert-dir", defaultCertDir, "cert cache directory")
-	autocertEmail = flag.String("autocert-email", "", "(optional) email address")
-	logLevel      = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
-	useH2C        = flag.Bool("h2c", false, "use h2c (for debug)")
-	debugHTTP     = flag.String("debug-http", "", "debug http server listen address")
+	listenAddr    = envflag.String("listen", "CAMO_LISTEN", ":443", "listen address")
+	password      = envflag.String("password", "CAMO_PASSWORD", "", "Set a password. It is recommended to use the environment variable CAMO_PASSWORD to set the password.")
+	mtu           = envflag.Int("mtu", "CAMO_MTU", camo.DefaultMTU, "tun mtu")
+	tunIPv4       = envflag.String("tun-ip4", "CAMO_TUN_IP4", "", "tun ipv4 cidr")
+	tunIPv6       = envflag.String("tun-ip6", "CAMO_TUN_IP6", "", "tun ipv6 cidr")
+	enableNAT     = envflag.Bool("nat", "CAMO_NAT", false, "enable NAT for IPv4 and IPv6")
+	enableNAT4    = envflag.Bool("nat4", "CAMO_NAT4", false, "enable NAT for IPv4")
+	enableNAT6    = envflag.Bool("nat6", "CAMO_NAT6", false, "enable NAT for IPv6")
+	autocertHost  = envflag.String("autocert-host", "CAMO_AUTOCERT_HOST", "", "hostname")
+	autocertDir   = envflag.String("autocert-dir", "CAMO_AUTOCERT_DIR", defaultCertDir, "cert cache directory")
+	autocertEmail = envflag.String("autocert-email", "CAMO_AUTOCERT_EMAIL", "", "(optional) email address")
+	logLevel      = envflag.String("log-level", "CAMO_LOG_LEVEL", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
+	useH2C        = envflag.Bool("h2c", "CAMO_H2C", false, "use h2c (for debug)")
+	debugHTTP     = envflag.String("debug-http", "CAMO_DEBUG_HTTP", "", "debug http server listen address")
 )
 
 var (
@@ -57,17 +59,18 @@ func init() {
 	initLog()
 
 	if *password == "" {
-		*password = os.Getenv("CAMO_PASSWORD")
-		if *password == "" {
-			log.Fatal("missing password")
+		log.Fatal("missing password")
+	}
+	// hidden the password to expvar and pprof package
+	for i := range os.Args {
+		if os.Args[i] == "-password" || os.Args[i] == "--password" {
+			os.Args[i+1] = "*"
 		}
-	} else {
-		// hidden the password to expvar and pprof package
-		for i := range os.Args {
-			if os.Args[i] == "-password" || os.Args[i] == "--password" {
-				os.Args[i+1] = "*"
-			}
-		}
+	}
+
+	if *enableNAT {
+		*enableNAT4 = true
+		*enableNAT6 = true
 	}
 
 	if *tunIPv4 == "" && *tunIPv6 == "" {
@@ -185,27 +188,29 @@ func initTun(defers *camo.Rollback) *camo.Iface {
 			log.Panicf("failed to set %s IPv4 address %s: %v", iface.Name(), *tunIPv4, err)
 		}
 		log.Infof("set %s IPv4 address at %s", iface.Name(), *tunIPv4)
+
+		if *enableNAT4 {
+			resetNAT4, err := camo.SetupNAT(iface.Subnet4().String())
+			if err != nil {
+				log.Panicf("failed to setup nat4: %v", err)
+			}
+			defers.Add(resetNAT4)
+		}
 	}
+
 	if *tunIPv6 != "" {
 		if err := iface.SetIPv6(*tunIPv6); err != nil {
 			log.Panicf("failed to set %s IPv6 address %s: %v", iface.Name(), *tunIPv6, err)
 		}
 		log.Infof("set %s IPv6 address at %s", iface.Name(), *tunIPv6)
-	}
 
-	if *enableNAT4 {
-		resetNAT4, err := camo.SetupNAT(iface.Subnet4().String())
-		if err != nil {
-			log.Panicf("failed to setup nat4: %v", err)
+		if *enableNAT6 {
+			resetNAT6, err := camo.SetupNAT(iface.Subnet6().String())
+			if err != nil {
+				log.Panicf("failed to setup nat6: %v", err)
+			}
+			defers.Add(resetNAT6)
 		}
-		defers.Add(resetNAT4)
-	}
-	if *enableNAT6 {
-		resetNAT6, err := camo.SetupNAT(iface.Subnet6().String())
-		if err != nil {
-			log.Panicf("failed to setup nat6: %v", err)
-		}
-		defers.Add(resetNAT6)
 	}
 
 	return iface

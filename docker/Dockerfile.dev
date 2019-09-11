@@ -1,22 +1,11 @@
-FROM golang
+FROM golang:alpine
 
-ARG USE_CN_APT_SOURCES
-RUN [ -z "$USE_CN_APT_SOURCES" ] || sed -r -i 's/(deb|security).debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list
-
-RUN apt-get update && apt-get install -y iproute2 iptables
+RUN apk add --no-cache git iproute2 iptables ip6tables ca-certificates dbus
 
 WORKDIR /camo
-
-ENV CAMO_PASSWORD=
-ENV CAMO_HOST=
-ENV CAMO_LOG_LEVEL=debug
-ENV CAMO_ENABLE_IP4=true
-ENV CAMO_TUN_IP4=10.20.0.1/24
-ENV CAMO_ENABLE_IP6=false
-ENV CAMO_TUN_IP6=fc00:ca::1/64
 
 EXPOSE 443
 # debug http port
 EXPOSE 6060
 
-CMD [ "docker/docker-dev-entrypoint.sh" ]
+ENTRYPOINT [ "docker/entrypoint-dev.sh" ]

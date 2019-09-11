@@ -26,23 +26,24 @@ import (
 
 	"github.com/denisbrodbeck/machineid"
 	"github.com/linfn/camo"
+	"github.com/linfn/camo/internal/envflag"
 )
 
 var camoDir = getCamoDir()
 
 var (
 	help      = flag.Bool("help", false, "help")
-	password  = flag.String("password", "", "Set a password. It is recommended to use the environment variable CAMO_PASSWORD to set the password.")
-	tun4      = flag.Bool("4", false, "tunneling for IPv4 only")
-	tun6      = flag.Bool("6", false, "tunneling for IPv6 only")
-	resolve   = flag.String("resolve", "", "provide a custom address for a specific host and port pair")
-	resolve4  = flag.Bool("resolve4", false, "resolve host name to IPv4 addresses only")
-	resolve6  = flag.Bool("resolve6", false, "resolve host name to IPv6 addresses only")
-	mtu       = flag.Int("mtu", camo.DefaultMTU, "mtu")
-	reGateway = flag.Bool("redirect-gateway", true, "redirect the gateway")
-	logLevel  = flag.String("log-level", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
-	useH2C    = flag.Bool("h2c", false, "use h2c (for debug)")
-	debugHTTP = flag.String("debug-http", "", "debug http server listen address")
+	password  = envflag.String("password", "CAMO_PASSWORD", "", "Set a password. It is recommended to use the environment variable CAMO_PASSWORD to set the password.")
+	tun4      = envflag.Bool("4", "CAMO_ENABLE_IP4", false, "tunneling for IPv4 only")
+	tun6      = envflag.Bool("6", "CAMO_ENABLE_IP6", false, "tunneling for IPv6 only")
+	resolve   = envflag.String("resolve", "CAMO_RESOLVE", "", "provide a custom address for a specific host and port pair")
+	resolve4  = envflag.Bool("resolve4", "CAMO_RESOLVE4", false, "resolve host name to IPv4 addresses only")
+	resolve6  = envflag.Bool("resolve6", "CAMO_RESOLVE6", false, "resolve host name to IPv6 addresses only")
+	mtu       = envflag.Int("mtu", "CAMO_MTU", camo.DefaultMTU, "mtu")
+	reGateway = envflag.Bool("redirect-gateway", "CAMO_REDIRECT_GATEWAY", true, "redirect the gateway")
+	logLevel  = envflag.String("log-level", "CAMO_LOG_LEVEL", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
+	useH2C    = envflag.Bool("h2c", "CAMO_H2C", false, "use h2c (for debug)")
+	debugHTTP = envflag.String("debug-http", "CAMO_DEBUG_HTTP", "", "debug http server listen address")
 )
 
 var (
@@ -67,7 +68,10 @@ func init() {
 
 	host = flag.Arg(0)
 	if host == "" {
-		log.Fatal("missing host")
+		host = os.Getenv("CAMO_HOST")
+		if host == "" {
+			log.Fatal("missing host")
+		}
 	}
 
 	if !*tun4 && !*tun6 {
@@ -88,16 +92,12 @@ func init() {
 	}
 
 	if *password == "" {
-		*password = os.Getenv("CAMO_PASSWORD")
-		if *password == "" {
-			log.Fatal("missing password")
-		}
-	} else {
-		// hidden the password to expvar and pprof package
-		for i := range os.Args {
-			if os.Args[i] == "-password" || os.Args[i] == "--password" {
-				os.Args[i+1] = "*"
-			}
+		log.Fatal("missing password")
+	}
+	// hidden the password to expvar and pprof package
+	for i := range os.Args {
+		if os.Args[i] == "-password" || os.Args[i] == "--password" {
+			os.Args[i+1] = "*"
 		}
 	}
 

@@ -1,0 +1,21 @@
+FROM golang:alpine as build
+
+RUN apk add --no-cache git
+
+WORKDIR /camo
+COPY . .
+
+RUN go get -d -v ./...
+RUN go build ./cmd/camo-client
+
+FROM alpine
+
+RUN apk add --no-cache iproute2 ca-certificates
+
+WORKDIR /camo
+
+COPY --from=build /camo/camo-client .
+
+ENV CAMO_PASSWORD=
+
+ENTRYPOINT [ "./camo-client" ]
