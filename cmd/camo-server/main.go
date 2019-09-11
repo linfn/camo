@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
 	"errors"
 	"expvar"
@@ -283,7 +282,7 @@ func initTLSConfig() *tls.Config {
 	tlsCfg.NextProtos = []string{"h2", "http/1.1"}
 
 	if *usePSK {
-		tlsCfg.SessionTicketKey = sha256.Sum256([]byte(*password))
+		tlsCfg.SessionTicketKey = camo.NewSessionTicketKey(*password)
 		tlsCfg.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return nil, errors.New("(PSK) bad certificate")
 		}
