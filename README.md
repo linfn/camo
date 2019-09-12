@@ -35,7 +35,7 @@ Camo is a VPN using HTTP/2 over TLS.
 ```sh
 docker run -d --cap-add=NET_ADMIN --device /dev/net/tun \
     -p 443:443 \
-    -v $HOME/.cache/camo/certs:/root/.cache/camo/certs \
+    -v $HOME/.cache/camo/certs:/camo/certs \
     --name camo \
     -e CAMO_PASSWORD=<password> \
     linfn/camo --autocert-host <hostname>
@@ -85,10 +85,9 @@ docker run -d --cap-add=NET_ADMIN --device /dev/net/tun \
     --sysctl net.ipv6.conf.all.forwarding=1 \
     --network ipv6 \
     -p 443:443 \
-    -v $HOME/.cache/camo/certs:/root/.cache/camo/certs \
+    -v $HOME/.cache/camo/certs:/camo/certs \
     --name camo \
     -e CAMO_PASSWORD=<password> \
-    -e CAMO_ENABLE_IP6=true \
     linfn/camo --autocert-host <hostname>
 ```
 

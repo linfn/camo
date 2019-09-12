@@ -26,7 +26,7 @@ docker-dev:
 		--sysctl net.ipv6.conf.default.forwarding=1 \
 		--sysctl net.ipv6.conf.all.forwarding=1 \
 		--network $(DOCKER_NETWORK) \
-		-v `pwd`/.certs:/root/.cache/camo/certs \
+		-v `pwd`/.certs:/camo/certs \
 		--name $(DEV_CONTAINER_NAME) camo:dev
 
 docker-release:
