@@ -42,7 +42,6 @@ var (
 	enableNAT     = envflag.Bool("nat", "CAMO_NAT", false, "enable NAT for IPv4 and IPv6")
 	enableNAT4    = envflag.Bool("nat4", "CAMO_NAT4", false, "enable NAT for IPv4")
 	enableNAT6    = envflag.Bool("nat6", "CAMO_NAT6", false, "enable NAT for IPv6")
-	usePSK        = envflag.Bool("psk", "CAMO_PSK", true, "Enable TLS 1.3 PSK mode. In this mode, the server does not need a domain name and certificate.")
 	autocertHost  = envflag.String("autocert-host", "CAMO_AUTOCERT_HOST", "", "hostname")
 	autocertDir   = envflag.String("autocert-dir", "CAMO_AUTOCERT_DIR", defaultCertDir, "cert cache directory")
 	autocertEmail = envflag.String("autocert-email", "CAMO_AUTOCERT_EMAIL", "", "(optional) email address")
@@ -93,14 +92,8 @@ func init() {
 		}
 	}
 
-	if *usePSK {
-		if *useH2C {
-			log.Fatal("cannot use both psk mode and h2c mode")
-		}
-	} else {
-		if !*useH2C && *autocertHost == "" {
-			log.Fatal("missing --autocert-host")
-		}
+	if !*useH2C && *autocertHost == "" {
+		log.Info("no auotcert config, use PSK mode")
 	}
 }
 
@@ -281,13 +274,6 @@ func initTLSConfig() *tls.Config {
 	tlsCfg.MinVersion = tls.VersionTLS12
 	tlsCfg.NextProtos = []string{"h2", "http/1.1"}
 
-	if *usePSK {
-		tlsCfg.SessionTicketKey = camo.NewSessionTicketKey(*password)
-		tlsCfg.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return nil, errors.New("(PSK) bad certificate")
-		}
-	}
-
 	if *autocertHost != "" {
 		certMgr := autocert.Manager{
 			Prompt:     autocert.AcceptTOS,
@@ -297,6 +283,11 @@ func initTLSConfig() *tls.Config {
 		}
 		tlsCfg.GetCertificate = certMgr.GetCertificate
 		tlsCfg.NextProtos = append(tlsCfg.NextProtos, acme.ALPNProto)
+	} else {
+		tlsCfg.SessionTicketKey = camo.NewSessionTicketKey(*password)
+		tlsCfg.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return nil, errors.New("(PSK) bad certificate")
+		}
 	}
 
 	return tlsCfg
