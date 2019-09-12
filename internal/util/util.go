@@ -63,6 +63,15 @@ func GetHostPortAddr(addr string, defaultPort string) (string, error) {
 	return addr, nil
 }
 
+// StripPort ...
+func StripPort(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
+}
+
 // IsIPv4 ...
 func IsIPv4(ip string) bool {
 	if strings.Index(ip, "/") >= 0 {

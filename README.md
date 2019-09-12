@@ -9,17 +9,28 @@ Camo is a VPN using HTTP/2 over TLS.
 
 ## Features
 
-1. 使用 HTTP/2 over TLS 建立隧道
-2. 内置 Let's Encrypt ACME (需要配置一个有效的域名)
-3. 身份认证, 对无法通过身份认证的请求均返回 404
-4. 支持 IPv4 和 IPv6
-5. 连接到同一服务器的 client 可以通过私有 IP 相互访问
+1. 使用 HTTP/2 over TLS 建立隧道, 将流量伪装成正常网站访问的流量
+2. 内置 Let's Encrypt ACME
+3. 支持 TLS 1.3 PSK 模式 (此模式下不再需要有效域名和证书)
+4. 身份认证, 对无法通过身份认证的请求均返回 404
+5. 支持 IPv4 和 IPv6
+6. 连接到同一服务器的 client 可以通过私有 IP 相互访问
 
 ## Getting Started
 
+`camo` 有两种工作模式:
+
+* **标准模式**: `camo` 使用标准的 HTTPS 建立连接, 这意味着服务端需要配置有效的域名和证书 (一切都是为了让它看上去像在访问某个网站).
+幸运的是 `camo` 内置了 `autocert` (via Let's Encrypt), 你不再需要手动申请和配置证书了.
+* **PSK 模式**: 借助于 TLS 1.3 的 PSK 模式, 服务端可以不再需要域名和证书, 只通过配置的密钥便可建立安全的连接, 更加方便使用.
+
 ### Run Server with Docker
 
-camo 内置了 autocert (via Let's Encrypt), 将你的域名指向你的 IP 后, 启动 `camo-server` 即可
+`camo` 建议你使用 [docker](https://get.docker.com/) 来运行 [camo-server](https://hub.docker.com/r/linfn/camo).
+
+#### 标准模式
+
+将你的域名指向你的 IP 后, 启动 `camo-server`
 
 ```sh
 docker run -d --cap-add=NET_ADMIN --device /dev/net/tun \
@@ -30,12 +41,29 @@ docker run -d --cap-add=NET_ADMIN --device /dev/net/tun \
     linfn/camo --autocert-host <hostname>
 ```
 
+这里 `<hostname>` 是你使用的域名 (它应该正确的指向了你的 IP, 否则无法通过 ACME Challenge), 挂载的 `$HOME/.cache/camo/certs` 目录用于存储之后自动生成的证书.
+
+#### PSK 模式
+
+删除标准模式中的 `--autocert-host <hostname>` 参数, `camo-server` 就会使用 PSK 模式工作.
+
+```sh
+docker run -d --cap-add=NET_ADMIN --device /dev/net/tun \
+    -p 443:443 \
+    --name camo \
+    -e CAMO_PASSWORD=<password> \
+    linfn/camo
+```
+
 #### Enable IPv6 with Docker
 
-有两种方式可以让 docker 容器在 IPv6 下工作:
+有 3 种方式可以让 docker 容器在 IPv6 下工作:
 
 1. 给容器分配一个 Public IPv6 地址 (from your public pool)
 2. 使用 IPv6 NAT 模式
+3. 使用 host network
+
+这里主要介绍前面两种方式.
 
 **Step 1**: 首先需要在 docker 中创建一个 IPv6 network
 
@@ -47,6 +75,8 @@ docker network create --ipv6 --subnet 2001:db8:1::/64 ipv6
 如果你使用 NAT 模式 (方式二), 你可以自己配置一个私有网段, 例如 fd00:1::/64.
 
 **Step 2**: 运行 `camo-server`
+
+这里以 `camo` 的标准模式举例 (如果使用 PSK 模式, 只需删除 `--autocert-host <hostname>` 参数即可)
 
 ```sh
 docker run -d --cap-add=NET_ADMIN --device /dev/net/tun \
@@ -73,7 +103,6 @@ ip -6 neigh add proxy <IPv6 address of container> dev eth0
 
 另外 (可选的), 你还可以使用 [ndppd](https://github.com/DanielAdolfsson/ndppd) 服务, 它能够为一个或多个网段提供 NDP Proxy.
 
-
 如果你使用 NAT 模式 (方式二):
 
 ```sh
@@ -84,24 +113,31 @@ ip6tables -t nat -A POSTROUTING -s 2001:db8:1::/64 -j MASQUERADE
 
 更多 IPv6 with Docker 的相关信息参考[这里](https://docs.docker.com/v17.09/engine/userguide/networking/default_network/ipv6/).
 
-
 ### Run Client
 
-**NOTE: camo-client 目前仅支持 macOS 和 linux 平台.**
+> NOTE: camo-client 目前仅支持 macOS 和 linux 平台, windows 平台的支持正在进行中
 
-使用 [go](https://golang.org) 获取 `camo-client`
+使用 [go (1.12 or newer)](https://golang.org) 获取 `camo-client`
 
 ```sh
-go get github.com/linfn/camo/cmd/camo-client
+go get -u github.com/linfn/camo/cmd/camo-client
 ```
 
-启动 `camo-client` (需要 root 权限)
+**使用标准模式启动** (需要 root 权限):
 
 ```sh
 sudo camo-client -password <password> <hostname>
 ```
 
-`camo-client` 会创建一个 `tun` 设备, 并同时接管 IPv4 和 IPv6 流量 (如果服务器启用了 IPv6 的话), 可以通过 `-4` 或 `-6` flag 进行设置
+**使用 PSK 模式启动** (需要 root 权限):
+
+```sh
+sudo camo-client -psk -password <password> -resolve <ip[:port]> <fake_hostname>
+```
+
+这里 `fake_hostname` 可以填写任意的域名, 例如 github.com, 然后在 `-resolve` 后填写真实的服务器 ip 地址(端口默认 443).
+
+`camo-client` 会创建一个 `tun` 设备, 并同时接管 IPv4 和 IPv6 流量 (如果服务器启用了 IPv6 的话), 可以通过 `-4` 或 `-6` flag 进行设置, 例如:
 
 ```sh
 # IPv4 only

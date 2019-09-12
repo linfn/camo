@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"expvar"
 	"flag"
 	"hash/crc32"
@@ -23,6 +24,7 @@ import (
 	"github.com/linfn/camo/internal/envflag"
 	"github.com/linfn/camo/internal/machineid"
 	"github.com/linfn/camo/internal/util"
+	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -91,7 +93,7 @@ func init() {
 	}
 
 	if !*useH2C && *autocertHost == "" {
-		log.Fatal("missing autocert-host")
+		log.Info("no auotcert config, use PSK mode")
 	}
 }
 
@@ -268,13 +270,27 @@ func initHTTPServer(handler http.Handler) *http.Server {
 }
 
 func initTLSConfig() *tls.Config {
-	certMgr := autocert.Manager{
-		Prompt:     autocert.AcceptTOS,
-		Cache:      autocert.DirCache(*autocertDir),
-		HostPolicy: autocert.HostWhitelist(*autocertHost),
-		Email:      *autocertEmail,
+	tlsCfg := new(tls.Config)
+	tlsCfg.MinVersion = tls.VersionTLS12
+	tlsCfg.NextProtos = []string{"h2", "http/1.1"}
+
+	if *autocertHost != "" {
+		certMgr := autocert.Manager{
+			Prompt:     autocert.AcceptTOS,
+			Cache:      autocert.DirCache(*autocertDir),
+			HostPolicy: autocert.HostWhitelist(*autocertHost),
+			Email:      *autocertEmail,
+		}
+		tlsCfg.GetCertificate = certMgr.GetCertificate
+		tlsCfg.NextProtos = append(tlsCfg.NextProtos, acme.ALPNProto)
+	} else {
+		tlsCfg.SessionTicketKey = camo.NewSessionTicketKey(*password)
+		tlsCfg.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return nil, errors.New("(PSK) bad certificate")
+		}
 	}
-	return certMgr.TLSConfig()
+
+	return tlsCfg
 }
 
 func withLog(log camo.Logger, h http.Handler) http.Handler {

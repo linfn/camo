@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"expvar"
@@ -39,6 +40,7 @@ var (
 	resolve   = envflag.String("resolve", "CAMO_RESOLVE", "", "provide a custom address for a specific host and port pair")
 	resolve4  = envflag.Bool("resolve4", "CAMO_RESOLVE4", false, "resolve host name to IPv4 addresses only")
 	resolve6  = envflag.Bool("resolve6", "CAMO_RESOLVE6", false, "resolve host name to IPv6 addresses only")
+	usePSK    = envflag.Bool("psk", "CAMO_PSK", false, "use TLS 1.3 PSK mode")
 	mtu       = envflag.Int("mtu", "CAMO_MTU", camo.DefaultMTU, "mtu")
 	reGateway = envflag.Bool("redirect-gateway", "CAMO_REDIRECT_GATEWAY", true, "redirect the gateway")
 	logLevel  = envflag.String("log-level", "CAMO_LOG_LEVEL", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
@@ -91,6 +93,10 @@ func init() {
 		*resolve = addr
 	}
 
+	if *usePSK && *useH2C {
+		log.Fatal("cannot use both psk mode and h2c mode")
+	}
+
 	if *password == "" {
 		log.Fatal("missing password")
 	}
@@ -119,9 +125,10 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	c := &camo.Client{
-		MTU:  *mtu,
-		CID:  cid,
-		Host: host,
+		MTU:       *mtu,
+		CID:       cid,
+		Host:      host,
+		TLSConfig: initTLSConfig(),
 		Dial: func(network, addr string) (net.Conn, error) {
 			if *resolve4 {
 				network = "tcp4"
@@ -185,6 +192,21 @@ func ensureCID(host string) string {
 	mac := hmac.New(sha256.New, []byte(mid))
 	mac.Write([]byte("camo@" + host))
 	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func initTLSConfig() *tls.Config {
+	tlsCfg := new(tls.Config)
+	tlsCfg.ServerName = util.StripPort(host)
+	if *usePSK {
+		cs, err := camo.NewTLSPSKSessionCache(tlsCfg.ServerName, camo.NewSessionTicketKey(*password))
+		if err != nil {
+			log.Panicf("failed to init TLS PSK session: %v", err)
+		}
+		tlsCfg.ClientSessionCache = cs
+	} else {
+		tlsCfg.ClientSessionCache = tls.NewLRUClientSessionCache(0)
+	}
+	return tlsCfg
 }
 
 func getNoise() int {
