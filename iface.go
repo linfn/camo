@@ -51,7 +51,7 @@ func (i *Iface) MTU() int {
 }
 
 // SetIPv4 ...
-func (i *Iface) SetIPv4(cidr string, peer net.IP) error {
+func (i *Iface) SetIPv4(cidr string) error {
 	if cidr == "" {
 		return i.delIPv4()
 	}
@@ -63,7 +63,7 @@ func (i *Iface) SetIPv4(cidr string, peer net.IP) error {
 		return errors.New("not a IPv4")
 	}
 	_ = i.delIPv4()
-	err = addIfaceAddr(i.Name(), cidr, peer.String())
+	err = addIfaceAddr(i.Name(), cidr)
 	if err != nil {
 		return err
 	}
@@ -85,7 +85,7 @@ func (i *Iface) SetIPv6(cidr string) error {
 		return errors.New("not a IPv6")
 	}
 	_ = i.delIPv6()
-	err = addIfaceAddr(i.Name(), cidr, "")
+	err = addIfaceAddr(i.Name(), cidr)
 	if err != nil {
 		return err
 	}
@@ -167,10 +167,10 @@ func setIfaceUp(dev string, mtu int) error {
 	}
 }
 
-func addIfaceAddr(dev string, cidr string, peer string) error {
+func addIfaceAddr(dev string, cidr string) error {
 	switch runtime.GOOS {
 	case "darwin", "freebsd":
-		return addIfaceAddrBSD(dev, cidr, peer)
+		return addIfaceAddrBSD(dev, cidr)
 	default:
 		return addIfaceAddrIPRoute2(dev, cidr)
 	}
@@ -218,16 +218,13 @@ func setIfaceUpBSD(dev string, mtu int) error {
 	return util.RunCmd("ifconfig", args...)
 }
 
-func addIfaceAddrBSD(dev string, cidr string, peer string) error {
+func addIfaceAddrBSD(dev string, cidr string) error {
 	if util.IsIPv4(cidr) {
 		ip, subnet, err := net.ParseCIDR(cidr)
 		if err != nil {
 			return err
 		}
-		if peer == "" {
-			peer = ip.String()
-		}
-		return util.RunCmd("ifconfig", dev, "inet", ip.String(), peer, "netmask", subnet.IP.String(), "alias")
+		return util.RunCmd("ifconfig", dev, "inet", ip.String(), ip.String(), "netmask", subnet.IP.String(), "alias")
 	}
 	return util.RunCmd("ifconfig", dev, "inet6", cidr, "alias")
 }

@@ -231,10 +231,10 @@ func setupTunHandler(iface *camo.Iface) func(net.IP, net.IPMask, net.IP) (func()
 		)
 		if tunIP.To4() != nil {
 			tunIPVer = 4
-			if err = iface.SetIPv4(cidr, gateway); err != nil {
+			if err = iface.SetIPv4(cidr); err != nil {
 				return nil, err
 			}
-			rollback.Add(func() { _ = iface.SetIPv4("", nil) })
+			rollback.Add(func() { _ = iface.SetIPv4("") })
 		} else {
 			tunIPVer = 6
 			if err = iface.SetIPv6(cidr); err != nil {
@@ -303,7 +303,6 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 		var (
 			ip   = res.IP
 			mask = res.Mask
-			gw   = res.Gateway
 		)
 
 		tunnel, err := c.OpenTunnel(ctx, ip)
@@ -314,7 +313,7 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 
 		cancel()
 
-		reset, err := setupTunHandler(iface)(ip, mask, gw)
+		reset, err := setupTunHandler(iface)(ip, mask, ip)
 		if err != nil {
 			_ = tunnel(ctx) // use a canceled ctx to terminate the tunnel
 			return nil, fmt.Errorf("setup tunnel error: %v", err)
