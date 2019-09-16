@@ -25,7 +25,7 @@ func startTestServer(ctx context.Context, t *testing.T, srv *Server) (addr strin
 	}
 
 	hsrv := &http.Server{Handler: h2c.NewHandler(srv.Handler(ctx, ""), &http2.Server{})}
-	go hsrv.Serve(l)
+	go func() { _ = hsrv.Serve(l) }()
 
 	go func() {
 		<-ctx.Done()
@@ -188,6 +188,12 @@ func TestClient_Noise(t *testing.T) {
 	defer func() { testHookClientDoReq = nil }()
 
 	res, _ := c.RequestIPv4(ctx)
-	c.RequestIPv6(ctx)
-	c.OpenTunnel(ctx, res.IP)
+	_, err := c.RequestIPv6(ctx)
+	if err != nil {
+		t.Error(err)
+	}
+	_, err = c.OpenTunnel(ctx, res.IP)
+	if err != nil {
+		t.Error(err)
+	}
 }

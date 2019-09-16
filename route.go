@@ -177,7 +177,7 @@ func SetupNAT(src string) (cancel func(), err error) {
 		return nil, err
 	}
 	return func() {
-		util.RunCmd(cmd, "-t", "nat", "-D", "POSTROUTING", "-s", src, "-j", "MASQUERADE")
+		_ = util.RunCmd(cmd, "-t", "nat", "-D", "POSTROUTING", "-s", src, "-j", "MASQUERADE")
 	}, nil
 }
 
@@ -198,8 +198,7 @@ func RedirectGateway(dev string, gateway string) (reset func(), err error) {
 		if err != nil {
 			return
 		}
-		rollback.Add(func() { DelRoute(ip, gateway, dev) })
-		return
+		rollback.Add(func() { _ = DelRoute(ip, gateway, dev) })
 	}
 
 	if util.IsIPv4(gateway) {

@@ -16,7 +16,7 @@ import (
 )
 
 func generateCert(host string) (*tls.Certificate, error) {
-	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +78,7 @@ func newPSKSession(host string, sessionTicketKey [32]byte) (*tls.ClientSessionSt
 	srv := http.Server{
 		Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
 	}
-	go srv.Serve(l)
+	go func() { _ = srv.Serve(l) }()
 	defer srv.Close()
 
 	sessionCache := tls.NewLRUClientSessionCache(0)
@@ -159,7 +159,10 @@ func NewTLSPSKSessionCache(host string, sessionTicketKey [32]byte) (tls.ClientSe
 // NewSessionTicketKey ...
 func NewSessionTicketKey(password string) (key [32]byte) {
 	m := hmac.New(sha256.New, []byte(password))
-	m.Write([]byte("camo-tls-psk"))
+	_, err := m.Write([]byte("camo-tls-psk"))
+	if err != nil {
+		panic(err)
+	}
 	m.Sum(key[:0])
 	return
 }

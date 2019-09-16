@@ -31,7 +31,7 @@ func TestTLSPSK(t *testing.T) {
 			fmt.Fprintln(w, "Hello, client")
 		}),
 	}
-	go srv.Serve(l)
+	go func() { _ = srv.Serve(l) }()
 	defer srv.Close()
 
 	cs, err := NewTLSPSKSessionCache(util.StripPort(host), NewSessionTicketKey(password))
