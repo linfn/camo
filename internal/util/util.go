@@ -44,9 +44,10 @@ func (r *Rollback) Add(f func()) {
 }
 
 // Do ...
-func (r Rollback) Do() {
-	for i := len(r) - 1; i >= 0; i-- {
-		r[i]()
+func (r *Rollback) Do() {
+	r2 := *r
+	for i := len(r2) - 1; i >= 0; i-- {
+		r2[i]()
 	}
 }
 

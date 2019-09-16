@@ -167,7 +167,7 @@ func delRouteBSD(dst string, gateway string, _ string) error {
 }
 
 // SetupNAT ...
-func SetupNAT(src string) (cancel func(), err error) {
+func SetupNAT(src string) (cancel func() error, err error) {
 	cmd := "iptables"
 	if !util.IsIPv4(src) {
 		cmd = "ip6tables"
@@ -176,13 +176,13 @@ func SetupNAT(src string) (cancel func(), err error) {
 	if err != nil {
 		return nil, err
 	}
-	return func() {
-		_ = util.RunCmd(cmd, "-t", "nat", "-D", "POSTROUTING", "-s", src, "-j", "MASQUERADE")
+	return func() error {
+		return util.RunCmd(cmd, "-t", "nat", "-D", "POSTROUTING", "-s", src, "-j", "MASQUERADE")
 	}, nil
 }
 
 // RedirectGateway 参考 https://www.tinc-vpn.org/examples/redirect-gateway/
-func RedirectGateway(dev string, gateway string) (reset func(), err error) {
+func RedirectGateway(dev string, gateway string) (reset func() error, err error) {
 	var rollback util.Rollback
 	defer func() {
 		if err != nil {
@@ -190,6 +190,7 @@ func RedirectGateway(dev string, gateway string) (reset func(), err error) {
 		}
 	}()
 
+	var rollbackErr error
 	add := func(ip, gateway, dev string) {
 		if err != nil {
 			return
@@ -198,14 +199,19 @@ func RedirectGateway(dev string, gateway string) (reset func(), err error) {
 		if err != nil {
 			return
 		}
-		rollback.Add(func() { _ = DelRoute(ip, gateway, dev) })
+		rollback.Add(func() {
+			err := DelRoute(ip, gateway, dev)
+			if err != nil && rollbackErr == nil {
+				rollbackErr = err
+			}
+		})
 	}
 
 	if util.IsIPv4(gateway) {
 		add("0.0.0.0/1", gateway, dev)
 		add("128.0.0.0/1", gateway, dev)
 	} else {
-		//add("::/3", gateway, dev)
+		add("::/3", gateway, dev)
 
 		// Global Unicast
 		add("2000::/4", gateway, dev)
@@ -218,5 +224,8 @@ func RedirectGateway(dev string, gateway string) (reset func(), err error) {
 	if err != nil {
 		return nil, err
 	}
-	return rollback.Do, nil
+	return func() error {
+		rollback.Do()
+		return rollbackErr
+	}, nil
 }

@@ -175,11 +175,11 @@ func initLog() {
 	if !ok {
 		stdlog.Fatal("invalid log level")
 	}
-	log = camo.NewLogger(stdlog.New(os.Stderr, "", stdlog.LstdFlags|stdlog.Llongfile), logLevel)
+	log = camo.NewLogger(stdlog.New(os.Stderr, "", stdlog.LstdFlags|stdlog.Lshortfile), logLevel)
 }
 
 func initTun(defers *util.Rollback) *camo.Iface {
-	iface, err := camo.NewTun(*mtu)
+	iface, err := camo.NewTunIface(*mtu)
 	if err != nil {
 		log.Panicf("failed to create tun device: %v", err)
 	}
@@ -198,7 +198,12 @@ func initTun(defers *util.Rollback) *camo.Iface {
 			if err != nil {
 				log.Panicf("failed to setup nat4: %v", err)
 			}
-			defers.Add(resetNAT4)
+			defers.Add(func() {
+				err := resetNAT4()
+				if err != nil {
+					log.Error(err)
+				}
+			})
 		}
 	}
 
@@ -213,7 +218,12 @@ func initTun(defers *util.Rollback) *camo.Iface {
 			if err != nil {
 				log.Panicf("failed to setup nat6: %v", err)
 			}
-			defers.Add(resetNAT6)
+			defers.Add(func() {
+				err := resetNAT6()
+				if err != nil {
+					log.Error(err)
+				}
+			})
 		}
 	}
 

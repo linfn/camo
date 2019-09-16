@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -116,7 +117,7 @@ func main() {
 		return
 	}
 
-	iface, err := camo.NewTun(*mtu)
+	iface, err := camo.NewTunIface(*mtu)
 	if err != nil {
 		log.Fatalf("failed to create tun device: %v", err)
 	}
@@ -173,7 +174,7 @@ func initLog() {
 	if !ok {
 		stdlog.Fatal("invalid log level")
 	}
-	log = camo.NewLogger(stdlog.New(os.Stderr, "", stdlog.LstdFlags|stdlog.Llongfile), logLevel)
+	log = camo.NewLogger(stdlog.New(os.Stderr, "", stdlog.LstdFlags|stdlog.Lshortfile), logLevel)
 }
 
 func getCamoDir() string {
@@ -216,69 +217,70 @@ func getNoise() int {
 	return int(crc32.ChecksumIEEE([]byte(cid)))
 }
 
-func setupTunHandler(iface *camo.Iface) func(net.IP, net.IPMask, net.IP) (func(), error) {
-	return func(tunIP net.IP, mask net.IPMask, gateway net.IP) (reset func(), err error) {
-		var rollback util.Rollback
-		defer func() {
-			if err != nil {
-				rollback.Do()
-			}
-		}()
-
-		var (
-			cidr     = util.ToCIDR(tunIP, mask)
-			tunIPVer int
-		)
-		if tunIP.To4() != nil {
-			tunIPVer = 4
-			if err = iface.SetIPv4(cidr); err != nil {
-				return nil, err
-			}
-			rollback.Add(func() { _ = iface.SetIPv4("") })
-		} else {
-			tunIPVer = 6
-			if err = iface.SetIPv6(cidr); err != nil {
-				return nil, err
-			}
-			rollback.Add(func() { _ = iface.SetIPv6("") })
+func setupTun(iface *camo.Iface, tunIP net.IP, mask net.IPMask, gateway net.IP) (reset func(), err error) {
+	var rollback util.Rollback
+	defer func() {
+		if err != nil {
+			rollback.Do()
 		}
-		log.Infof("%s(%s) up", iface.Name(), cidr)
-
-		if *reGateway {
-			// bypass tun for server ip
-			srvAddr, _ := remoteAddr.Load().(net.Addr)
-			if srvAddr == nil {
-				return nil, errors.New("failed to get server address")
-			}
-			srvIP, _, err := net.SplitHostPort(srvAddr.String())
-			if err != nil {
-				return nil, fmt.Errorf("failed to get server ip: %v (%s)", err, srvAddr)
-			}
-			srvIPVer := 4
-			if !util.IsIPv4(srvIP) {
-				srvIPVer = 6
-			}
-			if srvIPVer == tunIPVer {
-				oldGateway, oldDev, err := camo.GetRoute(srvIP)
-				if err != nil {
-					return nil, err
-				}
-				err = camo.AddRoute(srvIP, oldGateway, oldDev)
-				if err != nil {
-					return nil, err
-				}
-				rollback.Add(func() { _ = camo.DelRoute(srvIP, oldGateway, oldDev) })
-			}
-
-			resetGateway, err := camo.RedirectGateway(iface.Name(), gateway.String())
-			if err != nil {
-				return nil, err
-			}
-			rollback.Add(resetGateway)
-		}
-
-		return rollback.Do, nil
+	}()
+	addRollback := func(f func() error) {
+		rollback.Add(func() { _ = f() })
 	}
+
+	var (
+		cidr     = util.ToCIDR(tunIP, mask)
+		tunIPVer int
+	)
+	if tunIP.To4() != nil {
+		tunIPVer = 4
+		if err = iface.SetIPv4(cidr); err != nil {
+			return nil, err
+		}
+		addRollback(func() error { return iface.SetIPv4("") })
+	} else {
+		tunIPVer = 6
+		if err = iface.SetIPv6(cidr); err != nil {
+			return nil, err
+		}
+		addRollback(func() error { return iface.SetIPv6("") })
+	}
+	log.Infof("%s(%s) up", iface.Name(), cidr)
+
+	if *reGateway {
+		// bypass tun for server ip
+		srvAddr, _ := remoteAddr.Load().(net.Addr)
+		if srvAddr == nil {
+			return nil, errors.New("failed to get server address")
+		}
+		srvIP, _, err := net.SplitHostPort(srvAddr.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to get server ip: %v (%s)", err, srvAddr)
+		}
+		srvIPVer := 4
+		if !util.IsIPv4(srvIP) {
+			srvIPVer = 6
+		}
+		if srvIPVer == tunIPVer {
+			oldGateway, oldDev, err := camo.GetRoute(srvIP)
+			if err != nil {
+				return nil, err
+			}
+			err = camo.AddRoute(srvIP, oldGateway, oldDev)
+			if err != nil {
+				return nil, err
+			}
+			addRollback(func() error { return camo.DelRoute(srvIP, oldGateway, oldDev) })
+		}
+
+		resetGateway, err := camo.RedirectGateway(iface.Name(), gateway.String())
+		if err != nil {
+			return nil, err
+		}
+		addRollback(resetGateway)
+	}
+
+	return rollback.Do, nil
 }
 
 func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
@@ -303,6 +305,7 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 		var (
 			ip   = res.IP
 			mask = res.Mask
+			gw   = res.Gateway
 		)
 
 		tunnel, err := c.OpenTunnel(ctx, ip)
@@ -313,7 +316,12 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 
 		cancel()
 
-		reset, err := setupTunHandler(iface)(ip, mask, ip)
+		var reset func()
+		if ipVersion == 4 && runtime.GOOS == "darwin" {
+			reset, err = setupTun(iface, ip, mask, ip)
+		} else {
+			reset, err = setupTun(iface, ip, mask, gw)
+		}
 		if err != nil {
 			_ = tunnel(ctx) // use a canceled ctx to terminate the tunnel
 			return nil, fmt.Errorf("setup tunnel error: %v", err)

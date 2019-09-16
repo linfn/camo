@@ -14,6 +14,7 @@ import (
 // Iface ...
 type Iface struct {
 	*water.Interface
+	mtu int
 
 	ipv4    net.IP
 	subnet4 *net.IPNet
@@ -21,12 +22,13 @@ type Iface struct {
 	ipv6    net.IP
 	subnet6 *net.IPNet
 
-	closeOnce sync.Once
-	closeErr  error
+	closed   bool
+	closeErr error
+	mu       sync.Mutex
 }
 
-// NewTun ...
-func NewTun(mtu int) (*Iface, error) {
+// NewTunIface ...
+func NewTunIface(mtu int) (*Iface, error) {
 	iface, err := water.New(water.Config{DeviceType: water.TUN})
 	if err != nil {
 		return nil, err
@@ -38,22 +40,24 @@ func NewTun(mtu int) (*Iface, error) {
 	}
 	return &Iface{
 		Interface: iface,
+		mtu:       mtu,
 	}, nil
 }
 
 // MTU ...
 func (i *Iface) MTU() int {
-	ifi, err := net.InterfaceByName(i.Name())
-	if err != nil {
-		return 0
-	}
-	return ifi.MTU
+	return i.mtu
 }
 
 // SetIPv4 ...
 func (i *Iface) SetIPv4(cidr string) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.closed {
+		return errors.New("tun interface closed")
+	}
 	if cidr == "" {
-		return i.delIPv4()
+		return i.delIPv4Locked()
 	}
 	ip, subnet, err := net.ParseCIDR(cidr)
 	if err != nil {
@@ -62,7 +66,7 @@ func (i *Iface) SetIPv4(cidr string) error {
 	if ip.To4() == nil {
 		return errors.New("not a IPv4")
 	}
-	_ = i.delIPv4()
+	_ = i.delIPv4Locked()
 	err = addIfaceAddr(i.Name(), cidr)
 	if err != nil {
 		return err
@@ -74,8 +78,13 @@ func (i *Iface) SetIPv4(cidr string) error {
 
 // SetIPv6 ...
 func (i *Iface) SetIPv6(cidr string) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.closed {
+		return errors.New("tun interface closed")
+	}
 	if cidr == "" {
-		return i.delIPv6()
+		return i.delIPv6Locked()
 	}
 	ip, subnet, err := net.ParseCIDR(cidr)
 	if err != nil {
@@ -84,7 +93,7 @@ func (i *Iface) SetIPv6(cidr string) error {
 	if ip.To4() != nil {
 		return errors.New("not a IPv6")
 	}
-	_ = i.delIPv6()
+	_ = i.delIPv6Locked()
 	err = addIfaceAddr(i.Name(), cidr)
 	if err != nil {
 		return err
@@ -94,7 +103,7 @@ func (i *Iface) SetIPv6(cidr string) error {
 	return nil
 }
 
-func (i *Iface) delIPv4() error {
+func (i *Iface) delIPv4Locked() error {
 	if i.ipv4 == nil {
 		return nil
 	}
@@ -107,7 +116,7 @@ func (i *Iface) delIPv4() error {
 	return nil
 }
 
-func (i *Iface) delIPv6() error {
+func (i *Iface) delIPv6Locked() error {
 	if i.ipv6 == nil {
 		return nil
 	}
@@ -122,39 +131,57 @@ func (i *Iface) delIPv6() error {
 
 // CIDR4 ...
 func (i *Iface) CIDR4() string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	return util.ToCIDR(i.ipv4, i.subnet4.Mask)
 }
 
 // CIDR6 ...
 func (i *Iface) CIDR6() string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	return util.ToCIDR(i.ipv6, i.subnet6.Mask)
 }
 
 // IPv4 ...
 func (i *Iface) IPv4() net.IP {
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	return i.ipv4
 }
 
 // IPv6 ...
 func (i *Iface) IPv6() net.IP {
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	return i.ipv6
 }
 
 // Subnet4 ...
 func (i *Iface) Subnet4() *net.IPNet {
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	return i.subnet4
 }
 
 // Subnet6 ...
 func (i *Iface) Subnet6() *net.IPNet {
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	return i.subnet6
 }
 
 // Close ...
 func (i *Iface) Close() error {
-	i.closeOnce.Do(func() {
-		i.closeErr = i.Interface.Close()
-	})
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.closed {
+		return i.closeErr
+	}
+	_ = i.delIPv4Locked()
+	_ = i.delIPv6Locked()
+	i.closeErr = i.Interface.Close()
+	i.closed = true
 	return i.closeErr
 }
 
