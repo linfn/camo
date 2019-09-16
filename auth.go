@@ -73,6 +73,9 @@ func GetAuth(r *http.Request) (mac []byte, ok bool) {
 
 func hmacSha256(text string, password string) []byte {
 	m := hmac.New(sha256.New, []byte(password))
-	m.Write([]byte(text))
+	_, err := m.Write([]byte(text))
+	if err != nil {
+		panic(err)
+	}
 	return m.Sum(nil)
 }

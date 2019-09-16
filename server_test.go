@@ -129,7 +129,7 @@ func newIfaceIOMock() io.ReadWriteCloser {
 				src[i], dst[i] = dst[i], src[i]
 			}
 			// ignore checksum fix
-			n, err = rw.Write(pkt)
+			_, err = rw.Write(pkt)
 			if err != nil {
 				break
 			}

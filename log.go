@@ -96,14 +96,14 @@ func (l *LevelLogger) output(level int, calldepth int, v ...interface{}) {
 	if level > l.Level() {
 		return
 	}
-	l.logger.Output(calldepth+1, LogLevelTexts[level]+" "+fmt.Sprintln(v...))
+	_ = l.logger.Output(calldepth+1, LogLevelTexts[level]+" "+fmt.Sprintln(v...))
 }
 
 func (l *LevelLogger) outputf(level int, calldepth int, format string, v ...interface{}) {
 	if level > l.Level() {
 		return
 	}
-	l.logger.Output(calldepth+1, LogLevelTexts[level]+" "+fmt.Sprintf(format, v...))
+	_ = l.logger.Output(calldepth+1, LogLevelTexts[level]+" "+fmt.Sprintf(format, v...))
 }
 
 // Log ...

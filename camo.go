@@ -36,17 +36,25 @@ func getNoisePadding(noise int, url string) string {
 	return noisePadding[:size]
 }
 
+type packetBuffer struct {
+	Data []byte
+}
+
+func (p *packetBuffer) Reset() {
+	p.Data = p.Data[:cap(p.Data)]
+}
+
 type bufferPool interface {
-	getBuffer() []byte
-	freeBuffer([]byte)
+	getBuffer() *packetBuffer
+	freeBuffer(*packetBuffer)
 }
 
 type (
-	readPacketHandler      func(done <-chan struct{}, pkt []byte) bool
+	readPacketHandler      func(done <-chan struct{}, pkt *packetBuffer) bool
 	postWritePacketHandler func(done <-chan struct{}, err error)
 )
 
-func serveIO(ctx context.Context, rw io.ReadWriteCloser, bp bufferPool, readHandler readPacketHandler, toWrite <-chan []byte, postWriteHandler postWritePacketHandler) (err error) {
+func serveIO(ctx context.Context, rw io.ReadWriteCloser, bp bufferPool, readHandler readPacketHandler, toWrite <-chan *packetBuffer, postWriteHandler postWritePacketHandler) (err error) {
 	ctx, cancel := context.WithCancel(ctx)
 
 	var exitOnce sync.Once
@@ -73,12 +81,12 @@ func serveIO(ctx context.Context, rw io.ReadWriteCloser, bp bufferPool, readHand
 		done := ctx.Done()
 		for {
 			select {
-			case pkt, ok := <-toWrite:
+			case p, ok := <-toWrite:
 				if !ok {
 					return
 				}
-				_, e := rw.Write(pkt)
-				bp.freeBuffer(pkt)
+				_, e := rw.Write(p.Data)
+				bp.freeBuffer(p)
 				if postWriteHandler != nil {
 					postWriteHandler(done, e)
 				}
@@ -94,15 +102,16 @@ func serveIO(ctx context.Context, rw io.ReadWriteCloser, bp bufferPool, readHand
 
 	done := ctx.Done()
 	for {
-		b := bp.getBuffer()
-		n, e := rw.Read(b)
+		p := bp.getBuffer()
+		n, e := rw.Read(p.Data)
 		if n > 0 {
-			ok := readHandler(done, b[:n])
+			p.Data = p.Data[:n]
+			ok := readHandler(done, p)
 			if !ok {
-				bp.freeBuffer(b)
+				bp.freeBuffer(p)
 			}
 		} else {
-			bp.freeBuffer(b)
+			bp.freeBuffer(p)
 		}
 		if e != nil {
 			exit(e)
@@ -111,5 +120,5 @@ func serveIO(ctx context.Context, rw io.ReadWriteCloser, bp bufferPool, readHand
 	}
 
 	wg.Wait()
-	return
+	return err
 }

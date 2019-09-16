@@ -74,7 +74,7 @@ func StripPort(addr string) string {
 
 // IsIPv4 ...
 func IsIPv4(ip string) bool {
-	if strings.Index(ip, "/") >= 0 {
+	if strings.Contains(ip, "/") {
 		netIP, _, err := net.ParseCIDR(ip)
 		if err != nil {
 			return false

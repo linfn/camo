@@ -47,13 +47,13 @@ type Server struct {
 	cidIPv6Session map[string]*session
 
 	bufPool        sync.Pool
-	ifaceWriteChan chan []byte
+	ifaceWriteChan chan *packetBuffer
 
 	metrics     *Metrics
 	metricsOnce sync.Once
 }
 
-func (s *Server) getIfaceWriteChan() chan []byte {
+func (s *Server) getIfaceWriteChan() chan *packetBuffer {
 	s.mu.RLock()
 	if s.ifaceWriteChan != nil {
 		s.mu.RUnlock()
@@ -63,7 +63,7 @@ func (s *Server) getIfaceWriteChan() chan []byte {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ifaceWriteChan == nil {
-		s.ifaceWriteChan = make(chan []byte, defaultServerIfaceWriteChanLen)
+		s.ifaceWriteChan = make(chan *packetBuffer, defaultServerIfaceWriteChanLen)
 	}
 	return s.ifaceWriteChan
 }
@@ -75,22 +75,22 @@ func (s *Server) mtu() int {
 	return s.MTU
 }
 
-func (s *Server) getBuffer() (b []byte) {
+func (s *Server) getBuffer() (p *packetBuffer) {
 	v := s.bufPool.Get()
 	if v != nil {
-		b = v.([]byte)
-		s.Metrics().Buffer.FreeBytes.Add(-int64(len(b)))
+		p = v.(*packetBuffer)
+		s.Metrics().Buffer.FreeBytes.Add(-int64(cap(p.Data)))
 	} else {
-		b = make([]byte, s.mtu())
-		s.Metrics().Buffer.TotalBytes.Add(int64(len(b)))
+		p = &packetBuffer{Data: make([]byte, s.mtu())}
+		s.Metrics().Buffer.TotalBytes.Add(int64(cap(p.Data)))
 	}
-	return b
+	return p
 }
 
-func (s *Server) freeBuffer(b []byte) {
-	b = b[:cap(b)]
-	s.bufPool.Put(b)
-	s.Metrics().Buffer.FreeBytes.Add(int64(len(b)))
+func (s *Server) freeBuffer(p *packetBuffer) {
+	p.Reset()
+	s.bufPool.Put(p)
+	s.Metrics().Buffer.FreeBytes.Add(int64(cap(p.Data)))
 }
 
 func (s *Server) logger() Logger {
@@ -116,22 +116,22 @@ func (s *Server) ServeIface(ctx context.Context, iface io.ReadWriteCloser) error
 		rw      = WithIOMetric(iface, metrics.Iface)
 		bufpool = s
 	)
-	return serveIO(ctx, rw, bufpool, func(_ <-chan struct{}, pkt []byte) (retainBuf bool) {
-		ver := GetIPPacketVersion(pkt)
+	return serveIO(ctx, rw, bufpool, func(_ <-chan struct{}, p *packetBuffer) (retainBuf bool) {
+		ver := GetIPPacketVersion(p.Data)
 
 		if log.Level() >= LogLevelTrace {
 			if ver == 4 {
-				log.Tracef("iface recv: %s", IPv4Header(pkt))
+				log.Tracef("iface recv: %s", IPv4Header(p.Data))
 			} else {
-				log.Tracef("iface recv: %s", IPv6Header(pkt))
+				log.Tracef("iface recv: %s", IPv6Header(p.Data))
 			}
 		}
 
 		var dstIP net.IP
 		if ver == 4 {
-			dstIP = IPv4Header(pkt).Dst()
+			dstIP = IPv4Header(p.Data).Dst()
 		} else {
-			dstIP = IPv6Header(pkt).Dst()
+			dstIP = IPv6Header(p.Data).Dst()
 		}
 
 		ss, ok := s.getSession(dstIP)
@@ -144,7 +144,7 @@ func (s *Server) ServeIface(ctx context.Context, iface io.ReadWriteCloser) error
 			return
 		}
 		select {
-		case ss.writeChan <- pkt:
+		case ss.writeChan <- p:
 			retainBuf = true
 			metrics.Tunnels.Lags.Add(1)
 			return
@@ -186,7 +186,7 @@ func (s *Server) createSessionLocked(ip net.IP, mask net.IPMask, gw net.IP, cid 
 		mask:       mask,
 		gw:         gw,
 		createTime: time.Now(),
-		writeChan:  make(chan []byte, defaultServerTunnelWriteChanLen),
+		writeChan:  make(chan *packetBuffer, defaultServerTunnelWriteChanLen),
 	}
 
 	startTimer := func() *time.Timer {
@@ -385,14 +385,14 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 			ifaceWrite = s.getIfaceWriteChan()
 			bufpool    = s
 		)
-		setErr(serveIO(ctx, rw, bufpool, func(done <-chan struct{}, pkt []byte) (retainBuf bool) {
-			ver := GetIPPacketVersion(pkt)
+		setErr(serveIO(ctx, rw, bufpool, func(done <-chan struct{}, p *packetBuffer) (retainBuf bool) {
+			ver := GetIPPacketVersion(p.Data)
 
 			if log.Level() >= LogLevelTrace {
 				if ver == 4 {
-					log.Tracef("tunnel recv: %s", IPv4Header(pkt))
+					log.Tracef("tunnel recv: %s", IPv4Header(p.Data))
 				} else {
-					log.Tracef("tunnel recv: %s", IPv6Header(pkt))
+					log.Tracef("tunnel recv: %s", IPv6Header(p.Data))
 				}
 			}
 
@@ -401,11 +401,11 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 				dstIP net.IP
 			)
 			if ver == 4 {
-				h := IPv4Header(pkt)
+				h := IPv4Header(p.Data)
 				srcIP = h.Src()
 				dstIP = h.Dst()
 			} else {
-				h := IPv6Header(pkt)
+				h := IPv6Header(p.Data)
 				srcIP = h.Src()
 				dstIP = h.Dst()
 			}
@@ -421,7 +421,7 @@ func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(
 			}
 
 			select {
-			case ifaceWrite <- pkt:
+			case ifaceWrite <- p:
 				retainBuf = true
 				return
 			case <-done:

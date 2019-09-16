@@ -155,7 +155,7 @@ func main() {
 	expvar.Publish("camo", c.Metrics())
 
 	go func() {
-		c := make(chan os.Signal)
+		c := make(chan os.Signal, 1)
 		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 		log.Debugf("receive signal %s", <-c)
 		cancel()
@@ -190,7 +190,10 @@ func ensureCID(host string) string {
 		log.Fatal(err)
 	}
 	mac := hmac.New(sha256.New, []byte(mid))
-	mac.Write([]byte("camo@" + host))
+	_, err = mac.Write([]byte("camo@" + host))
+	if err != nil {
+		log.Panic(err)
+	}
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
@@ -213,7 +216,7 @@ func getNoise() int {
 	return int(crc32.ChecksumIEEE([]byte(cid)))
 }
 
-func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP, net.IPMask, net.IP) (func(), error) {
+func setupTunHandler(iface *camo.Iface) func(net.IP, net.IPMask, net.IP) (func(), error) {
 	return func(tunIP net.IP, mask net.IPMask, gateway net.IP) (reset func(), err error) {
 		var rollback util.Rollback
 		defer func() {
@@ -231,13 +234,13 @@ func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP, net.IPMask,
 			if err = iface.SetIPv4(cidr, gateway); err != nil {
 				return nil, err
 			}
-			rollback.Add(func() { iface.SetIPv4("", nil) })
+			rollback.Add(func() { _ = iface.SetIPv4("", nil) })
 		} else {
 			tunIPVer = 6
 			if err = iface.SetIPv6(cidr); err != nil {
 				return nil, err
 			}
-			rollback.Add(func() { iface.SetIPv6("") })
+			rollback.Add(func() { _ = iface.SetIPv6("") })
 		}
 		log.Infof("%s(%s) up", iface.Name(), cidr)
 
@@ -264,7 +267,7 @@ func setupTunHandler(c *camo.Client, iface *camo.Iface) func(net.IP, net.IPMask,
 				if err != nil {
 					return nil, err
 				}
-				rollback.Add(func() { camo.DelRoute(srvIP, oldGateway, oldDev) })
+				rollback.Add(func() { _ = camo.DelRoute(srvIP, oldGateway, oldDev) })
 			}
 
 			resetGateway, err := camo.RedirectGateway(iface.Name(), gateway.String())
@@ -311,9 +314,9 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 
 		cancel()
 
-		reset, err := setupTunHandler(c, iface)(ip, mask, gw)
+		reset, err := setupTunHandler(iface)(ip, mask, gw)
 		if err != nil {
-			tunnel(ctx) // use a canceled ctx to terminate the tunnel
+			_ = tunnel(ctx) // use a canceled ctx to terminate the tunnel
 			return nil, fmt.Errorf("setup tunnel error: %v", err)
 		}
 
@@ -404,7 +407,6 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 	}
 
 	wg.Wait()
-	return
 }
 
 func debugHTTPServer() {

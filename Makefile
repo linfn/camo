@@ -10,6 +10,7 @@ client:
 
 .PHONY: test
 test:
+	golangci-lint run
 	go test -race -coverprofile=coverage.txt ./...
 
 

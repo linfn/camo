@@ -62,7 +62,7 @@ func (i *Iface) SetIPv4(cidr string, peer net.IP) error {
 	if ip.To4() == nil {
 		return errors.New("not a IPv4")
 	}
-	i.delIPv4()
+	_ = i.delIPv4()
 	err = addIfaceAddr(i.Name(), cidr, peer.String())
 	if err != nil {
 		return err
@@ -84,7 +84,7 @@ func (i *Iface) SetIPv6(cidr string) error {
 	if ip.To4() != nil {
 		return errors.New("not a IPv6")
 	}
-	i.delIPv6()
+	_ = i.delIPv6()
 	err = addIfaceAddr(i.Name(), cidr, "")
 	if err != nil {
 		return err

@@ -38,9 +38,9 @@ type Client struct {
 
 	mu               sync.Mutex
 	bufPool          sync.Pool
-	ifaceWriteChan   chan []byte
-	tunnel4WriteChan chan []byte
-	tunnel6WriteChan chan []byte
+	ifaceWriteChan   chan *packetBuffer
+	tunnel4WriteChan chan *packetBuffer
+	tunnel6WriteChan chan *packetBuffer
 
 	hc *http.Client
 
@@ -48,29 +48,29 @@ type Client struct {
 	metricsOnce sync.Once
 }
 
-func (c *Client) getIfaceWriteChan() chan []byte {
+func (c *Client) getIfaceWriteChan() chan *packetBuffer {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.ifaceWriteChan == nil {
-		c.ifaceWriteChan = make(chan []byte, defaultClientIfaceWriteChanLen)
+		c.ifaceWriteChan = make(chan *packetBuffer, defaultClientIfaceWriteChanLen)
 	}
 	return c.ifaceWriteChan
 }
 
-func (c *Client) getTunnel4WriteChan() chan []byte {
+func (c *Client) getTunnel4WriteChan() chan *packetBuffer {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.tunnel4WriteChan == nil {
-		c.tunnel4WriteChan = make(chan []byte, defaultClientTunnelWriteChanLen)
+		c.tunnel4WriteChan = make(chan *packetBuffer, defaultClientTunnelWriteChanLen)
 	}
 	return c.tunnel4WriteChan
 }
 
-func (c *Client) getTunnel6WriteChan() chan []byte {
+func (c *Client) getTunnel6WriteChan() chan *packetBuffer {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.tunnel6WriteChan == nil {
-		c.tunnel6WriteChan = make(chan []byte, defaultClientTunnelWriteChanLen)
+		c.tunnel6WriteChan = make(chan *packetBuffer, defaultClientTunnelWriteChanLen)
 	}
 	return c.tunnel6WriteChan
 }
@@ -82,22 +82,22 @@ func (c *Client) mtu() int {
 	return c.MTU
 }
 
-func (c *Client) getBuffer() (b []byte) {
+func (c *Client) getBuffer() (p *packetBuffer) {
 	v := c.bufPool.Get()
 	if v != nil {
-		b = v.([]byte)
-		c.Metrics().Buffer.FreeBytes.Add(-int64(len(b)))
+		p = v.(*packetBuffer)
+		c.Metrics().Buffer.FreeBytes.Add(-int64(cap(p.Data)))
 	} else {
-		b = make([]byte, c.mtu())
-		c.Metrics().Buffer.TotalBytes.Add(int64(len(b)))
+		p = &packetBuffer{Data: make([]byte, c.mtu())}
+		c.Metrics().Buffer.TotalBytes.Add(int64(cap(p.Data)))
 	}
-	return b
+	return p
 }
 
-func (c *Client) freeBuffer(b []byte) {
-	b = b[:cap(b)]
-	c.bufPool.Put(b)
-	c.Metrics().Buffer.FreeBytes.Add(int64(len(b)))
+func (c *Client) freeBuffer(p *packetBuffer) {
+	p.Reset()
+	c.bufPool.Put(p)
+	c.Metrics().Buffer.FreeBytes.Add(int64(cap(p.Data)))
 }
 
 func (c *Client) logger() Logger {
@@ -125,26 +125,26 @@ func (c *Client) ServeIface(ctx context.Context, iface io.ReadWriteCloser) error
 		tunnel6 = c.getTunnel6WriteChan()
 		bufpool = c
 	)
-	return serveIO(ctx, rw, bufpool, func(done <-chan struct{}, pkt []byte) (retainBuf bool) {
-		ver := GetIPPacketVersion(pkt)
+	return serveIO(ctx, rw, bufpool, func(done <-chan struct{}, p *packetBuffer) (retainBuf bool) {
+		ver := GetIPPacketVersion(p.Data)
 
 		if log.Level() >= LogLevelTrace {
 			if ver == 4 {
-				log.Tracef("iface recv: %s", IPv4Header(pkt))
+				log.Tracef("iface recv: %s", IPv4Header(p.Data))
 			} else {
-				log.Tracef("iface recv: %s", IPv6Header(pkt))
+				log.Tracef("iface recv: %s", IPv6Header(p.Data))
 			}
 		}
 
 		var (
 			dstIP  net.IP
-			tunnel chan []byte
+			tunnel chan *packetBuffer
 		)
 		if ver == 4 {
-			dstIP = IPv4Header(pkt).Dst()
+			dstIP = IPv4Header(p.Data).Dst()
 			tunnel = tunnel4
 		} else {
-			dstIP = IPv6Header(pkt).Dst()
+			dstIP = IPv6Header(p.Data).Dst()
 			tunnel = tunnel6
 		}
 
@@ -154,7 +154,7 @@ func (c *Client) ServeIface(ctx context.Context, iface io.ReadWriteCloser) error
 		}
 
 		select {
-		case tunnel <- pkt:
+		case tunnel <- p:
 			retainBuf = true
 			metrics.Tunnels.Lags.Add(1)
 			return
@@ -175,7 +175,7 @@ func (c *Client) serveTunnel(ctx context.Context, rw io.ReadWriteCloser, localIP
 	var (
 		log             = c.logger()
 		ifaceWriteChan  = c.getIfaceWriteChan()
-		tunnelWriteChan chan []byte
+		tunnelWriteChan chan *packetBuffer
 		postWrite       = func(<-chan struct{}, error) { metrics.Lags.Add(-1) }
 		bufpool         = c
 	)
@@ -184,22 +184,22 @@ func (c *Client) serveTunnel(ctx context.Context, rw io.ReadWriteCloser, localIP
 	} else {
 		tunnelWriteChan = c.getTunnel6WriteChan()
 	}
-	return serveIO(ctx, rw, bufpool, func(done <-chan struct{}, pkt []byte) (retainBuf bool) {
-		ver := GetIPPacketVersion(pkt)
+	return serveIO(ctx, rw, bufpool, func(done <-chan struct{}, p *packetBuffer) (retainBuf bool) {
+		ver := GetIPPacketVersion(p.Data)
 
 		if log.Level() >= LogLevelTrace {
 			if ver == 4 {
-				log.Tracef("tunnel recv: %s", IPv4Header(pkt))
+				log.Tracef("tunnel recv: %s", IPv4Header(p.Data))
 			} else {
-				log.Tracef("tunnel recv: %s", IPv6Header(pkt))
+				log.Tracef("tunnel recv: %s", IPv6Header(p.Data))
 			}
 		}
 
 		var dstIP net.IP
 		if ver == 4 {
-			dstIP = IPv4Header(pkt).Dst()
+			dstIP = IPv4Header(p.Data).Dst()
 		} else {
-			dstIP = IPv6Header(pkt).Dst()
+			dstIP = IPv6Header(p.Data).Dst()
 		}
 
 		if !dstIP.Equal(localIP) {
@@ -208,7 +208,7 @@ func (c *Client) serveTunnel(ctx context.Context, rw io.ReadWriteCloser, localIP
 		}
 
 		select {
-		case ifaceWriteChan <- pkt:
+		case ifaceWriteChan <- p:
 			retainBuf = true
 			return
 		case <-done:
@@ -350,7 +350,7 @@ func (c *Client) doReq(req *http.Request) (*http.Response, error) {
 		}
 		res.Body.Close()
 		return res, &ClientAPIError{
-			Err:  &statusError{res.StatusCode, string(msg)},
+			Err:  &statusError{res.StatusCode, msg},
 			temp: isStatusRetryable(res.StatusCode),
 		}
 	}

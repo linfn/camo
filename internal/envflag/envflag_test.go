@@ -23,7 +23,10 @@ func TestEnvFlag(t *testing.T) {
 	b := Bool("bool", "TEST_ENV_BOOL", false, "bool")
 	i := Int("int", "TEST_ENV_INT", 1, "int")
 
-	flag.CommandLine.Parse([]string{})
+	err := flag.CommandLine.Parse([]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if *s != "test2" {
 		t.Error()
@@ -43,7 +46,10 @@ func TestEnvFlag(t *testing.T) {
 	b = Bool("bool", "TEST_ENV_BOOL", false, "bool")
 	i = Int("int", "TEST_ENV_INT", 1, "int")
 
-	flag.CommandLine.Parse([]string{"-string", "test3", "-bool=false", "-int", "3"})
+	err = flag.CommandLine.Parse([]string{"-string", "test3", "-bool=false", "-int", "3"})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if *s != "test3" {
 		t.Error()

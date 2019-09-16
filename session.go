@@ -11,7 +11,7 @@ type session struct {
 	ip         net.IP
 	mask       net.IPMask
 	gw         net.IP
-	writeChan  chan []byte
+	writeChan  chan *packetBuffer
 	createTime time.Time
 
 	mu    sync.Mutex
@@ -77,7 +77,7 @@ func (s *session) idleDuration() time.Duration {
 		return 0
 	}
 	if !s.releasedTime.IsZero() {
-		return time.Now().Sub(s.releasedTime)
+		return time.Since(s.releasedTime)
 	}
-	return time.Now().Sub(s.createTime)
+	return time.Since(s.createTime)
 }
