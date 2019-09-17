@@ -133,6 +133,9 @@ func (i *Iface) delIPv6Locked() error {
 func (i *Iface) CIDR4() string {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if i.ipv4 == nil {
+		return ""
+	}
 	return util.ToCIDR(i.ipv4, i.subnet4.Mask)
 }
 
@@ -140,6 +143,9 @@ func (i *Iface) CIDR4() string {
 func (i *Iface) CIDR6() string {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if i.ipv6 == nil {
+		return ""
+	}
 	return util.ToCIDR(i.ipv6, i.subnet6.Mask)
 }
 

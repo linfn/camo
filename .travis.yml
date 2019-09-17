@@ -13,10 +13,14 @@ env:
   - GO111MODULE=on
 
 before_script:
+  - if [ "${TRAVIS_OS_NAME}" == "linux" ]; then
+      sudo sh -c 'echo 0 > /proc/sys/net/ipv6/conf/all/disable_ipv6';
+    fi
   - curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh| sh -s -- -b $(go env GOPATH)/bin v1.18.0
 
 script:
-  - make test
+  - make lint
+  - sudo -E env "PATH=$PATH" make unit
 
 after_success:
   - bash <(curl -s https://codecov.io/bash)
