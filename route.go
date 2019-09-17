@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 
+	"unicode"
+
 	"github.com/linfn/camo/internal/util"
 )
 
@@ -173,7 +175,26 @@ func delRouteBSD(dst string, gateway string, _ string) error {
 }
 
 func getRouteWindows(dst string) (gateway string, dev string, err error) {
-	return
+	r, err := runCmdOutput("powershell", "-Command", fmt.Sprintf("Find-NetRoute -RemoteIPAddress %s | select -Last 1 | select NextHop, InterfaceAlias | ft -HideTableHeaders", dst))
+	str := strings.TrimSpace(string(r))
+	i := strings.IndexFunc(str, unicode.IsSpace)
+	if i <= 0 {
+		err = fmt.Errorf("failed to get route from cmd result: %s", str)
+		return
+	}
+	return str[:i], strings.TrimSpace(str[i:]), nil
+}
+
+func ipToCIDR(ip string) (cidr string) {
+	if strings.Contains(ip, "/") {
+		return ip
+	}
+	if IsIPv4(ip) {
+		cidr = ip + "/32"
+	} else {
+		cidr = ip + "/128"
+	}
+	return cidr
 }
 
 func addRouteWindows(dst string, gateway string, dev string) error {
@@ -181,7 +202,7 @@ func addRouteWindows(dst string, gateway string, dev string) error {
 	if !util.IsIPv4(dst) {
 		family = "ipv6"
 	}
-	return util.RunCmd("netsh", "interface", family, "add", "route", dst, fmt.Sprintf("interface=%s", dev), fmt.Sprintf("nexthop=%s", gateway), "metric=2", "store=active")
+	return util.RunCmd("netsh", "interface", family, "add", "route", ipToCIDR(dst), fmt.Sprintf("interface=%s", dev), fmt.Sprintf("nexthop=%s", gateway), "metric=2", "store=active")
 }
 
 func delRouteWindows(dst string, gateway string, dev string) error {
@@ -189,7 +210,7 @@ func delRouteWindows(dst string, gateway string, dev string) error {
 	if !util.IsIPv4(dst) {
 		family = "ipv6"
 	}
-	return util.RunCmd("netsh", "interface", family, "delete", "route", dst, fmt.Sprintf("interface=%s", dev), fmt.Sprintf("nexthop=%s", gateway), "store=active")
+	return util.RunCmd("netsh", "interface", family, "delete", "route", ipToCIDR(dst), fmt.Sprintf("interface=%s", dev), fmt.Sprintf("nexthop=%s", gateway), "store=active")
 }
 
 // SetupNAT ...

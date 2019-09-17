@@ -299,7 +299,6 @@ func addIfaceAddrWindows(dev string, cidr string) error {
 	if !util.IsIPv4(cidr) {
 		family = "ipv6"
 	}
-	// "gateway=10.20.0.1", "gwmetric=2",
 	return util.RunCmd("netsh", "interface", family, "add", "address", dev, fmt.Sprintf("address=%s", cidr), "store=active")
 }
 
@@ -312,6 +311,5 @@ func delIfaceAddrWindows(dev string, cidr string) error {
 	if ip.To4() == nil {
 		family = "ipv6"
 	}
-	// "gateway=10.20.0.1",
 	return util.RunCmd("netsh", "interface", family, "delete", "address", dev, fmt.Sprintf("address=%s", ip), "store=active")
 }
