@@ -95,14 +95,42 @@ func TestRoute(t *testing.T) {
 				t.Fatal(err)
 			}
 			gw, dev, err = GetRoute(tt.args.routeDst)
+			if err == nil {
+				if gw == gateway {
+					t.Errorf("gw = %s, want != %s", gw, gateway)
+				}
+				if dev == tt.args.dev {
+					t.Errorf("dev = %s, want != %s", dev, tt.args.dev)
+				}
+			}
+		})
+	}
+}
+
+func TestSetupNAT(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("linux only")
+	}
+
+	type args struct {
+		src string
+	}
+	tests := []struct {
+		name string
+		args args
+	}{
+		{"IPv4", args{"10.20.0.0/24"}},
+		{"IPv6", args{"fd01:cafe::/64"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cancel, err := SetupNAT(tt.args.src)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if gw == gateway {
-				t.Errorf("gw = %s, want != %s", gw, gateway)
-			}
-			if dev == tt.args.dev {
-				t.Errorf("dev = %s, want != %s", dev, tt.args.dev)
+			err = cancel()
+			if err != nil {
+				t.Error(err)
 			}
 		})
 	}
