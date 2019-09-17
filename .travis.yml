@@ -16,7 +16,8 @@ before_script:
   - curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh| sh -s -- -b $(go env GOPATH)/bin v1.18.0
 
 script:
-  - make test
+  - make lint
+  - sudo -E env "PATH=$PATH" make unit
 
 after_success:
   - bash <(curl -s https://codecov.io/bash)

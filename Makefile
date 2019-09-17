@@ -8,10 +8,16 @@ server:
 client:
 	go build ./cmd/camo-client
 
-.PHONY: test
-test:
+
+.PHONY: lint unit test
+
+lint:
 	golangci-lint run
+
+unit:
 	go test -race -coverprofile=coverage.txt ./...
+
+test: lint unit
 
 
 DEV_CONTAINER_NAME=camo-dev
