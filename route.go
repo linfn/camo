@@ -175,7 +175,11 @@ func delRouteBSD(dst string, gateway string, _ string) error {
 }
 
 func getRouteWindows(dst string) (gateway string, dev string, err error) {
-	r, err := runCmdOutput("powershell", "-Command", fmt.Sprintf("Find-NetRoute -RemoteIPAddress %s | select -Last 1 | select NextHop, InterfaceAlias | ft -HideTableHeaders", dst))
+	// TODO output 编码问题
+	r, err := util.RunCmdOutput("powershell", "-Command", fmt.Sprintf("Find-NetRoute -RemoteIPAddress %s | select -Last 1 | select NextHop, InterfaceAlias | ft -HideTableHeaders", dst))
+	if err != nil {
+		return
+	}
 	str := strings.TrimSpace(string(r))
 	i := strings.IndexFunc(str, unicode.IsSpace)
 	if i <= 0 {
@@ -189,7 +193,7 @@ func ipToCIDR(ip string) (cidr string) {
 	if strings.Contains(ip, "/") {
 		return ip
 	}
-	if IsIPv4(ip) {
+	if util.IsIPv4(ip) {
 		cidr = ip + "/32"
 	} else {
 		cidr = ip + "/128"
