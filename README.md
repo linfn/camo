@@ -16,19 +16,36 @@ Camo is a VPN using HTTP/2 over TLS.
 5. 支持 IPv4 和 IPv6
 6. 连接到同一服务器的 client 可以通过私有 IP 相互访问
 
+## Table of Contents
+
+- [Camo](#camo)
+  - [Features](#features)
+  - [Table of Contents](#table-of-contents)
+  - [Getting Started](#getting-started)
+    - [Run Server with Docker](#run-server-with-docker)
+      - [Standard Mode (Server)](#standard-mode-server)
+      - [PSK Mode (Server)](#psk-mode-server)
+      - [Enable IPv6 with Docker](#enable-ipv6-with-docker)
+    - [Run Client](#run-client)
+      - [Standard Mode (Client)](#standard-mode-client)
+      - [PSK Mode (Client)](#psk-mode-client)
+      - [IPv4 or IPv6 only](#ipv4-or-ipv6-only)
+  - [Build](#build)
+  - [License](#license)
+
 ## Getting Started
 
 `camo` 有两种工作模式:
 
-* **标准模式**: `camo` 使用标准的 HTTPS 建立连接, 这意味着服务端需要配置有效的域名和证书 (一切都是为了让它看上去像在访问某个网站).
+- **标准模式**: `camo` 使用 HTTPS 建立连接, 这意味着服务端需要配置有效的域名和证书 (一切都是为了让它看上去像在访问某个网站).
 幸运的是 `camo` 内置了 `autocert` (via Let's Encrypt), 你不再需要手动申请和配置证书了.
-* **PSK 模式**: 借助于 TLS 1.3 的 PSK 模式, 服务端可以不再需要域名和证书, 只通过配置的密钥便可建立安全的连接, 更加方便使用.
+- **PSK 模式**: 借助于 TLS 1.3 的 PSK 模式, 服务端可以不再需要域名和证书, 只通过配置的密钥便可建立安全的连接, 更加方便使用.
 
 ### Run Server with Docker
 
 `camo` 建议你使用 [docker](https://get.docker.com/) 来运行 [camo-server](https://hub.docker.com/r/linfn/camo).
 
-#### 标准模式
+#### Standard Mode (Server)
 
 将你的域名指向你的 IP 后, 启动 `camo-server`
 
@@ -43,9 +60,9 @@ docker run -d --cap-add=NET_ADMIN --device /dev/net/tun \
 
 这里 `<hostname>` 是你使用的域名 (它应该正确的指向了你的 IP, 否则无法通过 ACME Challenge), 挂载的 `$HOME/.cache/camo/certs` 目录用于存储之后自动生成的证书.
 
-#### PSK 模式
+#### PSK Mode (Server)
 
-删除标准模式中的 `--autocert-host <hostname>` 参数, `camo-server` 就会使用 PSK 模式工作.
+删除标准模式中的 `--autocert-host <hostname>` 参数, `camo-server` 就会使用 PSK 模式工作:
 
 ```sh
 docker run -d --cap-add=NET_ADMIN --device /dev/net/tun \
@@ -79,17 +96,21 @@ docker network create --ipv6 --subnet 2001:db8:1::/64 ipv6
 这里以 `camo` 的标准模式举例 (如果使用 PSK 模式, 只需删除 `--autocert-host <hostname>` 参数即可)
 
 ```sh
-docker run -d --cap-add=NET_ADMIN --device /dev/net/tun \
+docker run -d --cap-add NET_ADMIN --cap-add SYS_MODULE \
+    --device /dev/net/tun \
     --sysctl net.ipv6.conf.all.disable_ipv6=0 \
     --sysctl net.ipv6.conf.default.forwarding=1 \
     --sysctl net.ipv6.conf.all.forwarding=1 \
     --network ipv6 \
     -p 443:443 \
+    -v /lib/modules:/lib/modules:ro \
     -v $HOME/.cache/camo/certs:/camo/certs \
     --name camo \
     -e CAMO_PASSWORD=<password> \
     linfn/camo --autocert-host <hostname>
 ```
+
+这里 `--cap-add SYS_MODULE` 和 `-v /lib/modules:/lib/modules:ro` 是为了让 `ip6tables` 有能力自动载入需要的内核模块.
 
 **Step 3**:
 
@@ -122,19 +143,25 @@ ip6tables -t nat -A POSTROUTING -s 2001:db8:1::/64 -j MASQUERADE
 go get -u github.com/linfn/camo/cmd/camo-client
 ```
 
-**使用标准模式启动** (需要 root 权限):
+#### Standard Mode (Client)
+
+使用标准模式启动 (需要 root 权限):
 
 ```sh
 sudo camo-client -password <password> <hostname>
 ```
 
-**使用 PSK 模式启动** (需要 root 权限):
+#### PSK Mode (Client)
+
+使用 PSK 模式启动 (需要 root 权限):
 
 ```sh
 sudo camo-client -psk -password <password> -resolve <ip[:port]> <fake_hostname>
 ```
 
-这里 `fake_hostname` 可以填写任意的域名, 例如 github.com, 然后在 `-resolve` 后填写真实的服务器 ip 地址(端口默认 443).
+这里 `fake_hostname` 可以填写任意的域名 (例如 github.com), 然后在 `-resolve` 后填写真实的服务器 ip 地址 (端口默认 443).
+
+#### IPv4 or IPv6 only
 
 `camo-client` 会创建一个 `tun` 设备, 并同时接管 IPv4 和 IPv6 流量 (如果服务器启用了 IPv6 的话), 可以通过 `-4` 或 `-6` flag 进行设置, 例如:
 
