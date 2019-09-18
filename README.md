@@ -36,7 +36,7 @@ Camo is a VPN using HTTP/2 over TLS.
 
 ## Install
 
-你可在 [release](https://github.com/linfn/camo/releases) 页面直接下载 `camo`.
+你可以在 [release](https://github.com/linfn/camo/releases) 页面直接下载 `camo`.
 
 或者使用 `camo` 的 docker 镜像:
 
@@ -47,7 +47,7 @@ docker pull linfn/camo
 docker pull linfn/camo-client
 ```
 
-或者使用 [go (1.12 or newer)](https://golang.org) 编译安装:
+或者使用 [go (1.12 or newer)](https://golang.org) 编译安装最新版本:
 
 ```sh
 go get -u github.com/linfn/camo/cmd/...
