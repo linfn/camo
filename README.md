@@ -21,6 +21,7 @@ Camo is a VPN using HTTP/2 over TLS.
 - [Camo](#camo)
   - [Features](#features)
   - [Table of Contents](#table-of-contents)
+  - [Install](#install)
   - [Getting Started](#getting-started)
     - [Run Server with Docker](#run-server-with-docker)
       - [Standard Mode (Server)](#standard-mode-server)
@@ -32,6 +33,25 @@ Camo is a VPN using HTTP/2 over TLS.
       - [IPv4 or IPv6 only](#ipv4-or-ipv6-only)
   - [Build](#build)
   - [License](#license)
+
+## Install
+
+你可在 [release](https://github.com/linfn/camo/releases) 页面直接下载 `camo`.
+
+或者使用 `camo` 的 docker 镜像:
+
+```sh
+# for server
+docker pull linfn/camo
+# for client
+docker pull linfn/camo-client
+```
+
+或者使用 [go (1.12 or newer)](https://golang.org) 编译安装:
+
+```sh
+go get -u github.com/linfn/camo/cmd/...
+```
 
 ## Getting Started
 
@@ -136,12 +156,6 @@ ip6tables -t nat -A POSTROUTING -s 2001:db8:1::/64 -j MASQUERADE
 ### Run Client
 
 > NOTE: camo-client 目前仅支持 macOS 和 linux 平台, windows 平台的支持正在进行中
-
-使用 [go (1.12 or newer)](https://golang.org) 获取 `camo-client`
-
-```sh
-go get -u github.com/linfn/camo/cmd/camo-client
-```
 
 #### Standard Mode (Client)
 
