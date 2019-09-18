@@ -1,12 +1,12 @@
 FROM golang:alpine as build
 
-RUN apk add --no-cache git
+RUN apk add --no-cache git make
 
 WORKDIR /camo
 COPY . .
 
 RUN go get -d -v ./...
-RUN go build ./cmd/camo-server
+RUN make server
 
 FROM alpine
 

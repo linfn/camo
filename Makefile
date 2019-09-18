@@ -1,12 +1,20 @@
 .PHONY: all
 all: server client
 
+commit = $(shell git rev-parse HEAD)
+date = $(shell date -u +'%Y.%m.%d')
+
 .PHONY: server client
 server:
-	go build ./cmd/camo-server
+	go build -ldflags '-s -w -X main.buildDate=$(date) -X main.buildCommit=$(commit)' ./cmd/camo-server
 
 client:
-	go build ./cmd/camo-client
+	go build -ldflags '-s -w -X main.buildDate=$(date) -X main.buildCommit=$(commit)' ./cmd/camo-client
+
+.PHONY: release
+release:
+	goreleaser --snapshot --skip-publish --rm-dist
+
 
 
 .PHONY: lint unit test
@@ -18,6 +26,12 @@ unit:
 	go test -race -coverprofile=coverage.txt ./...
 
 test: lint unit
+
+
+
+docker-release:
+	docker build -t linfn/camo -f docker/Dockerfile .
+	docker build -t linfn/camo-client -f docker/Dockerfile.client .
 
 
 DEV_CONTAINER_NAME=camo-dev
@@ -36,8 +50,6 @@ docker-dev:
 		-v `pwd`/.certs:/camo/certs \
 		--name $(DEV_CONTAINER_NAME) camo:dev
 
-docker-release:
-	docker build -t linfn/camo -f docker/Dockerfile .
 
 .PHONY: run
 run:
