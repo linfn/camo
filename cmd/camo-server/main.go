@@ -6,6 +6,7 @@ import (
 	"errors"
 	"expvar"
 	"flag"
+	"fmt"
 	"hash/crc32"
 	stdlog "log"
 	"math/rand"
@@ -30,7 +31,11 @@ import (
 	"golang.org/x/net/http2/h2c"
 )
 
-var defaultCertDir = path.Join(getCamoDir(), "certs")
+var (
+	buildCommit    string
+	buildDate      string
+	defaultCertDir = path.Join(getCamoDir(), "certs")
+)
 
 var (
 	help          = flag.Bool("help", false, "help")
@@ -55,6 +60,13 @@ var (
 )
 
 func init() {
+	flag.Usage = func() {
+		fmt.Printf("Camo is a VPN using HTTP/2 over TLS.\n\n")
+		fmt.Printf("Build Commit: %s\nBuild Date: %s\n\n", buildCommit, buildDate)
+		fmt.Printf("Usage: camo-server [OPTIONS]\n")
+		flag.PrintDefaults()
+	}
+
 	flag.Parse()
 	if *help {
 		return

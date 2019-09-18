@@ -31,7 +31,11 @@ import (
 	"github.com/linfn/camo/internal/util"
 )
 
-var camoDir = getCamoDir()
+var (
+	buildCommit string
+	buildDate   string
+	camoDir     = getCamoDir()
+)
 
 var (
 	help      = flag.Bool("help", false, "help")
@@ -58,7 +62,9 @@ var (
 
 func init() {
 	flag.Usage = func() {
-		fmt.Printf("Usage: %s [OPTIONS] host\n", os.Args[0])
+		fmt.Printf("Camo is a VPN using HTTP/2 over TLS.\n\n")
+		fmt.Printf("Build Commit: %s\nBuild Date: %s\n\n", buildCommit, buildDate)
+		fmt.Printf("Usage: camo-client [OPTIONS] host\n")
 		flag.PrintDefaults()
 	}
 

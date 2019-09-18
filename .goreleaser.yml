@@ -1,0 +1,57 @@
+project_name: camo
+
+env:
+  - GO111MODULE=on
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: camo-server
+    main: ./cmd/camo-server
+    binary: camo-server
+    env:
+      - CGO_ENABLED=0
+    ldflags: -s -w -X main.buildDate={{ time "2006.01.02" }} -X main.buildCommit={{ .FullCommit }}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - 386
+      - amd64
+      - arm
+      - arm64
+  - id: camo-client
+    main: ./cmd/camo-client
+    binary: camo-clinet
+    env:
+      - CGO_ENABLED=0
+    ldflags: -s -w -X main.buildDate={{ time "2006.01.02" }} -X main.buildCommit={{ .FullCommit }}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - 386
+      - amd64
+      - arm
+      - arm64
+
+archives:
+  - name_template: '{{ .ProjectName }}_{{ .Tag }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}'
+    replacements:
+      386: i386
+      amd64: x86_64
+
+checksum:
+  name_template: "{{ .ProjectName }}_checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - Merge pull request
+      - Merge branch
