@@ -339,8 +339,8 @@ func (s *Server) RequestIPv6(cid string) (*IPResult, error) {
 	return s.assignIPLocked(cid, s.cidIPv6Session, s.IPv6Pool)
 }
 
-// OpenTunnel ...
-func (s *Server) OpenTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(ctx context.Context) error, error) {
+// CreateTunnel ...
+func (s *Server) CreateTunnel(ip net.IP, cid string, rw io.ReadWriteCloser) (func(ctx context.Context) error, error) {
 	ss, err := s.getOrCreateSession(ip, cid)
 	if err != nil {
 		return nil, err
@@ -513,7 +513,7 @@ func (s *Server) Handler(ctx context.Context, prefix string) http.Handler {
 			return
 		}
 
-		tunnel, err := s.OpenTunnel(ip, cid, &httpServerStream{r.Body, w})
+		tunnel, err := s.CreateTunnel(ip, cid, &httpServerStream{r.Body, w})
 		if err != nil {
 			http.Error(w, err.Error(), getStatusCode(err))
 			return

@@ -155,7 +155,7 @@ func newTestIPv6Packet(src, dst net.IP) []byte {
 	return pkt
 }
 
-func TestServer_OpenTunnel(t *testing.T) {
+func TestServer_CreateTunnel(t *testing.T) {
 	srv := newTestServer()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -187,7 +187,7 @@ func TestServer_OpenTunnel(t *testing.T) {
 			rw, peer := newBidirectionalStream()
 			defer rw.Close()
 
-			tunnel, err := srv.OpenTunnel(res.IP, "camo1", peer)
+			tunnel, err := srv.CreateTunnel(res.IP, "camo1", peer)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -220,12 +220,12 @@ func TestServer_OpenTunnel(t *testing.T) {
 			cancel()
 			wg.Wait()
 
-			_, err = srv.OpenTunnel(res.IP, "camo2", uselessIO())
+			_, err = srv.CreateTunnel(res.IP, "camo2", uselessIO())
 			if err == nil {
 				t.Error("Different clients cannot open the tunnel of the same ip address at the same time.")
 			}
 
-			_, err = srv.OpenTunnel(tt.specifiedIP, "camo2", uselessIO())
+			_, err = srv.CreateTunnel(tt.specifiedIP, "camo2", uselessIO())
 			if err != nil {
 				t.Error(err)
 			}
@@ -270,7 +270,7 @@ func TestServer_SessionRob(t *testing.T) {
 	rw1, peer1 := newBidirectionalStream()
 	defer rw1.Close()
 
-	tunnel1, err := srv.OpenTunnel(net.ParseIP("10.20.0.2"), "camo1", peer1)
+	tunnel1, err := srv.CreateTunnel(net.ParseIP("10.20.0.2"), "camo1", peer1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func TestServer_SessionRob(t *testing.T) {
 		close(tunnel1Robbed)
 	}()
 
-	_, err = srv.OpenTunnel(net.ParseIP("10.20.0.2"), "camo1", uselessIO())
+	_, err = srv.CreateTunnel(net.ParseIP("10.20.0.2"), "camo1", uselessIO())
 	if err != nil {
 		t.Fatal(err)
 	}

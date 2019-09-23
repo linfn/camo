@@ -436,8 +436,8 @@ func (s *httpClientStream) Close() error {
 	return err2
 }
 
-// OpenTunnel ...
-func (c *Client) OpenTunnel(ctx context.Context, ip net.IP) (tunnel func(context.Context) error, err error) {
+// CreateTunnel ...
+func (c *Client) CreateTunnel(ctx context.Context, ip net.IP) (tunnel func(context.Context) error, err error) {
 	r, w := io.Pipe()
 	req := &http.Request{
 		Method: "POST",

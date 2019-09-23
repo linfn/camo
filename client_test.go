@@ -79,7 +79,7 @@ func TestClient_RequestIP(t *testing.T) {
 	}
 }
 
-func TestClient_OpenTunnel(t *testing.T) {
+func TestClient_CreateTunnel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -109,7 +109,7 @@ func TestClient_OpenTunnel(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			tunnel, err := c.OpenTunnel(ctx, res.IP)
+			tunnel, err := c.CreateTunnel(ctx, res.IP)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -192,7 +192,7 @@ func TestClient_Noise(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	_, err = c.OpenTunnel(ctx, res.IP)
+	_, err = c.CreateTunnel(ctx, res.IP)
 	if err != nil {
 		t.Error(err)
 	}

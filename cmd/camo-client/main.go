@@ -290,7 +290,7 @@ func setupTun(iface *camo.Iface, tunIP net.IP, mask net.IPMask, gateway net.IP) 
 }
 
 func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
-	openTunnel := func(ctx context.Context, ipVersion int) (func(context.Context) error, error) {
+	createTunnel := func(ctx context.Context, ipVersion int) (func(context.Context) error, error) {
 		var err error
 
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -314,7 +314,7 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 			gw   = res.Gateway
 		)
 
-		tunnel, err := c.OpenTunnel(ctx, ip)
+		tunnel, err := c.CreateTunnel(ctx, ip)
 		if err != nil {
 			cancel()
 			return nil, err
@@ -342,7 +342,7 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 	tunneld := func(ctx context.Context, ipVersion int) {
 		firstRound := true
 		for {
-			tunnel, err := openTunnel(ctx, ipVersion)
+			tunnel, err := createTunnel(ctx, ipVersion)
 			if ctx.Err() != nil {
 				break
 			}
