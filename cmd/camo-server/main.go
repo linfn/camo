@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/linfn/camo"
-	"github.com/linfn/camo/internal/envflag"
+	"github.com/linfn/camo/internal/env"
 	"github.com/linfn/camo/internal/machineid"
 	"github.com/linfn/camo/internal/util"
 	"golang.org/x/crypto/acme"
@@ -39,20 +39,20 @@ var (
 
 var (
 	help          = flag.Bool("help", false, "help")
-	listenAddr    = envflag.String("listen", "CAMO_LISTEN", ":443", "listen address")
-	password      = envflag.String("password", "CAMO_PASSWORD", "", "Set a password. It is recommended to use the environment variable CAMO_PASSWORD to set the password.")
-	mtu           = envflag.Int("mtu", "CAMO_MTU", camo.DefaultMTU, "tun mtu")
-	tunIPv4       = envflag.String("tun-ip4", "CAMO_TUN_IP4", "", "tun ipv4 cidr")
-	tunIPv6       = envflag.String("tun-ip6", "CAMO_TUN_IP6", "", "tun ipv6 cidr")
-	enableNAT     = envflag.Bool("nat", "CAMO_NAT", false, "enable NAT for IPv4 and IPv6")
-	enableNAT4    = envflag.Bool("nat4", "CAMO_NAT4", false, "enable NAT for IPv4")
-	enableNAT6    = envflag.Bool("nat6", "CAMO_NAT6", false, "enable NAT for IPv6")
-	autocertHost  = envflag.String("autocert-host", "CAMO_AUTOCERT_HOST", "", "hostname")
-	autocertDir   = envflag.String("autocert-dir", "CAMO_AUTOCERT_DIR", defaultCertDir, "cert cache directory")
-	autocertEmail = envflag.String("autocert-email", "CAMO_AUTOCERT_EMAIL", "", "(optional) email address")
-	logLevel      = envflag.String("log-level", "CAMO_LOG_LEVEL", camo.LogLevelTexts[camo.LogLevelInfo], "log level")
-	useH2C        = envflag.Bool("h2c", "CAMO_H2C", false, "use h2c (for debug)")
-	debugHTTP     = envflag.String("debug-http", "CAMO_DEBUG_HTTP", "", "debug http server listen address")
+	listenAddr    = flag.String("listen", env.String("CAMO_LISTEN", ":443"), "listen address")
+	password      = flag.String("password", env.String("CAMO_PASSWORD", ""), "Set a password. It is recommended to use the environment variable CAMO_PASSWORD to set the password.")
+	mtu           = flag.Int("mtu", env.Int("CAMO_MTU", camo.DefaultMTU), "tun mtu")
+	tunIPv4       = flag.String("tun-ip4", env.String("CAMO_TUN_IP4", ""), "tun ipv4 cidr")
+	tunIPv6       = flag.String("tun-ip6", env.String("CAMO_TUN_IP6", ""), "tun ipv6 cidr")
+	enableNAT     = flag.Bool("nat", env.Bool("CAMO_NAT", false), "enable NAT for IPv4 and IPv6")
+	enableNAT4    = flag.Bool("nat4", env.Bool("CAMO_NAT4", false), "enable NAT for IPv4")
+	enableNAT6    = flag.Bool("nat6", env.Bool("CAMO_NAT6", false), "enable NAT for IPv6")
+	autocertHost  = flag.String("autocert-host", env.String("CAMO_AUTOCERT_HOST", ""), "hostname")
+	autocertDir   = flag.String("autocert-dir", env.String("CAMO_AUTOCERT_DIR", defaultCertDir), "cert cache directory")
+	autocertEmail = flag.String("autocert-email", env.String("CAMO_AUTOCERT_EMAIL", ""), "(optional) email address")
+	logLevel      = flag.String("log-level", env.String("CAMO_LOG_LEVEL", camo.LogLevelTexts[camo.LogLevelInfo]), "log level")
+	useH2C        = flag.Bool("h2c", env.Bool("CAMO_H2C", false), "use h2c (for debug)")
+	debugHTTP     = flag.String("debug-http", env.String("CAMO_DEBUG_HTTP", ""), "debug http server listen address")
 )
 
 var (
