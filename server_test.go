@@ -222,7 +222,7 @@ func TestServer_CreateTunnel(t *testing.T) {
 
 			_, err = srv.CreateTunnel(res.IP, "camo2", uselessIO())
 			if err == nil {
-				t.Error("Different clients cannot open the tunnel of the same ip address at the same time.")
+				t.Error("Different clients cannot create the tunnel of the same ip address at the same time.")
 			}
 
 			_, err = srv.CreateTunnel(tt.specifiedIP, "camo2", uselessIO())

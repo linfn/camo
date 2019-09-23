@@ -525,7 +525,7 @@ func (s *Server) Handler(ctx context.Context, prefix string) http.Handler {
 		}
 
 		log := s.logger()
-		log.Infof("tunnel %s opened, cid: %s, remote: %s", ip, cid, r.RemoteAddr)
+		log.Infof("tunnel %s created, cid: %s, remote: %s", ip, cid, r.RemoteAddr)
 
 		err = tunnel(ctx)
 		if err != nil {

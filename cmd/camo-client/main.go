@@ -347,7 +347,7 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 				break
 			}
 			if err != nil {
-				log.Errorf("failed to open IPv%d tunnel: %v", ipVersion, err)
+				log.Errorf("failed to create IPv%d tunnel: %v", ipVersion, err)
 				if ae, ok := err.(*camo.ClientAPIError); ok {
 					if !firstRound || ae.Temporary() {
 						goto RETRY
@@ -356,7 +356,7 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 				break
 			}
 
-			log.Infof("IPv%d tunnel opened", ipVersion)
+			log.Infof("IPv%d tunnel created", ipVersion)
 
 			err = tunnel(ctx)
 			if ctx.Err() != nil {
