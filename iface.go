@@ -2,6 +2,7 @@ package camo
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"runtime"
 	"strconv"
@@ -29,7 +30,7 @@ type Iface struct {
 
 // NewTunIface ...
 func NewTunIface(mtu int) (*Iface, error) {
-	iface, err := water.New(water.Config{DeviceType: water.TUN})
+	iface, err := createTun()
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +71,12 @@ func (i *Iface) SetIPv4(cidr string) error {
 	err = addIfaceAddr(i.Name(), cidr)
 	if err != nil {
 		return err
+	}
+	if runtime.GOOS == "windows" {
+		err = windowsTUNControlIP4(i.Interface, cidr)
+		if err != nil {
+			return nil
+		}
 	}
 	i.ipv4 = ip
 	i.subnet4 = subnet
@@ -195,6 +202,8 @@ func setIfaceUp(dev string, mtu int) error {
 	switch runtime.GOOS {
 	case "darwin", "freebsd":
 		return setIfaceUpBSD(dev, mtu)
+	case "windows":
+		return setIfaceUpWindows(dev, mtu)
 	default:
 		return setIfaceUpIPRoute2(dev, mtu)
 	}
@@ -204,6 +213,8 @@ func addIfaceAddr(dev string, cidr string) error {
 	switch runtime.GOOS {
 	case "darwin", "freebsd":
 		return addIfaceAddrBSD(dev, cidr)
+	case "windows":
+		return addIfaceAddrWindows(dev, cidr)
 	default:
 		return addIfaceAddrIPRoute2(dev, cidr)
 	}
@@ -213,6 +224,8 @@ func delIfaceAddr(dev string, cidr string) error {
 	switch runtime.GOOS {
 	case "darwin", "freebsd":
 		return delIfaceAddrBSD(dev, cidr)
+	case "windows":
+		return delIfaceAddrWindows(dev, cidr)
 	default:
 		return delIfaceAddrIPRoute2(dev, cidr)
 	}
@@ -268,4 +281,35 @@ func delIfaceAddrBSD(dev string, cidr string) error {
 		family = "inet6"
 	}
 	return util.RunCmd("ifconfig", dev, family, cidr, "-alias")
+}
+
+func setIfaceUpWindows(dev string, mtu int) error {
+	args := []string{"interface", "ipv4", "set", "subinterface", dev, fmt.Sprintf("mtu=%d", mtu), "store=active"}
+	err1 := util.RunCmd("netsh", args...)
+	args = []string{"interface", "ipv6", "set", "subinterface", dev, fmt.Sprintf("mtu=%d", mtu), "store=active"}
+	err2 := util.RunCmd("netsh", args...)
+	if err1 != nil && err2 != nil {
+		return err1
+	}
+	return nil
+}
+
+func addIfaceAddrWindows(dev string, cidr string) error {
+	family := "ipv4"
+	if !util.IsIPv4(cidr) {
+		family = "ipv6"
+	}
+	return util.RunCmd("netsh", "interface", family, "add", "address", dev, fmt.Sprintf("address=%s", cidr), "store=active")
+}
+
+func delIfaceAddrWindows(dev string, cidr string) error {
+	ip, _, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return err
+	}
+	family := "ipv4"
+	if ip.To4() == nil {
+		family = "ipv6"
+	}
+	return util.RunCmd("netsh", "interface", family, "delete", "address", dev, fmt.Sprintf("address=%s", ip), "store=active")
 }

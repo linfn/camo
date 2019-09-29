@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 
+	"unicode"
+
 	"github.com/linfn/camo/internal/util"
 )
 
@@ -16,6 +18,8 @@ func GetRoute(dst string) (gateway string, dev string, err error) {
 	switch runtime.GOOS {
 	case "darwin", "freebsd":
 		return getRouteBSD(dst)
+	case "windows":
+		return getRouteWindows(dst)
 	default:
 		return getRouteIPRoute2(dst)
 	}
@@ -26,6 +30,8 @@ func AddRoute(dst string, gateway string, dev string) error {
 	switch runtime.GOOS {
 	case "darwin", "freebsd":
 		return addRouteBSD(dst, gateway, dev)
+	case "windows":
+		return addRouteWindows(dst, gateway, dev)
 	default:
 		return addRouteIPRoute2(dst, gateway, dev)
 	}
@@ -36,6 +42,8 @@ func DelRoute(dst string, gateway string, dev string) error {
 	switch runtime.GOOS {
 	case "darwin", "freebsd":
 		return delRouteBSD(dst, gateway, dev)
+	case "windows":
+		return delRouteWindows(dst, gateway, dev)
 	default:
 		return delRouteIPRoute2(dst, gateway, dev)
 	}
@@ -166,6 +174,49 @@ func delRouteBSD(dst string, gateway string, _ string) error {
 	return util.RunCmd("route", "-n", "delete", "-net", family, dst, gateway)
 }
 
+func getRouteWindows(dst string) (gateway string, dev string, err error) {
+	// TODO output 编码问题
+	r, err := util.RunCmdOutput("powershell", "-Command", fmt.Sprintf("Find-NetRoute -RemoteIPAddress %s | select -Last 1 | select NextHop, InterfaceAlias | ft -HideTableHeaders", dst))
+	if err != nil {
+		return
+	}
+	str := strings.TrimSpace(string(r))
+	i := strings.IndexFunc(str, unicode.IsSpace)
+	if i <= 0 {
+		err = fmt.Errorf("failed to get route from cmd result: %s", str)
+		return
+	}
+	return str[:i], strings.TrimSpace(str[i:]), nil
+}
+
+func ipToCIDR(ip string) (cidr string) {
+	if strings.Contains(ip, "/") {
+		return ip
+	}
+	if util.IsIPv4(ip) {
+		cidr = ip + "/32"
+	} else {
+		cidr = ip + "/128"
+	}
+	return cidr
+}
+
+func addRouteWindows(dst string, gateway string, dev string) error {
+	family := "ipv4"
+	if !util.IsIPv4(dst) {
+		family = "ipv6"
+	}
+	return util.RunCmd("netsh", "interface", family, "add", "route", ipToCIDR(dst), fmt.Sprintf("interface=%s", dev), fmt.Sprintf("nexthop=%s", gateway), "metric=2", "store=active")
+}
+
+func delRouteWindows(dst string, gateway string, dev string) error {
+	family := "ipv4"
+	if !util.IsIPv4(dst) {
+		family = "ipv6"
+	}
+	return util.RunCmd("netsh", "interface", family, "delete", "route", ipToCIDR(dst), fmt.Sprintf("interface=%s", dev), fmt.Sprintf("nexthop=%s", gateway), "store=active")
+}
+
 // SetupNAT ...
 func SetupNAT(src string) (cancel func() error, err error) {
 	cmd := "iptables"
@@ -208,17 +259,25 @@ func RedirectGateway(dev string, gateway string) (reset func() error, err error)
 	}
 
 	if util.IsIPv4(gateway) {
-		add("0.0.0.0/1", gateway, dev)
-		add("128.0.0.0/1", gateway, dev)
+		if runtime.GOOS == "windows" {
+			add("0.0.0.0/0", gateway, dev)
+		} else {
+			add("0.0.0.0/1", gateway, dev)
+			add("128.0.0.0/1", gateway, dev)
+		}
 	} else {
-		add("::/3", gateway, dev)
+		if runtime.GOOS == "windows" {
+			add("::/0", gateway, dev)
+		} else {
+			add("::/3", gateway, dev)
 
-		// Global Unicast
-		add("2000::/4", gateway, dev)
-		add("3000::/4", gateway, dev)
+			// Global Unicast
+			add("2000::/4", gateway, dev)
+			add("3000::/4", gateway, dev)
 
-		// Unique Local Unicast
-		add("fc00::/7", gateway, dev)
+			// Unique Local Unicast
+			add("fc00::/7", gateway, dev)
+		}
 	}
 
 	if err != nil {
