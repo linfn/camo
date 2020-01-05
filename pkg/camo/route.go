@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/linfn/camo/internal/util"
+	"github.com/linfn/camo/pkg/util"
 )
 
 // GetRoute ...

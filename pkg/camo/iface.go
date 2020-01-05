@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/linfn/camo/internal/util"
+	"github.com/linfn/camo/pkg/util"
 	"github.com/songgao/water"
 )
 
