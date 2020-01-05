@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lucas-clemente/quic-go"
+	"github.com/lucas-clemente/quic-go/http3"
 	"golang.org/x/net/http2"
 )
 
@@ -34,6 +36,7 @@ type Client struct {
 	Auth      func(r *http.Request)
 	Logger    Logger
 	UseH2C    bool
+	UseH3     bool
 	Noise     int
 
 	mu               sync.Mutex
@@ -217,42 +220,81 @@ func (c *Client) serveTunnel(ctx context.Context, rw io.ReadWriteCloser, localIP
 	}, tunnelWriteChan, postWrite)
 }
 
+// hack for lucas-clemente/quic-go package
+type clientH3PacketConn struct {
+	net.PacketConn
+	io.ReadWriter
+	remoteAddr net.Addr
+}
+
+func (c *clientH3PacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	return c.ReadWriter.Write(b)
+}
+func (c *clientH3PacketConn) RemoteAddr() net.Addr {
+	return c.remoteAddr
+}
+
 func (c *Client) newTransport() (ts http.RoundTripper) {
 	// TODO Need a timing to refresh the cached server address (if the DNS results changed)
 	var (
 		mu           sync.Mutex
 		resolvedAddr net.Addr
 	)
-	return &http2.Transport{
-		DialTLS: func(network, addr string, cfg *tls.Config) (conn net.Conn, err error) {
-			mu.Lock()
-			locked := true
-			if resolvedAddr != nil {
-				addr = resolvedAddr.String()
+	dial := func(network, addr string) (conn net.Conn, err error) {
+		mu.Lock()
+		locked := true
+		if resolvedAddr != nil {
+			addr = resolvedAddr.String()
+			mu.Unlock()
+			locked = false
+		}
+		defer func() {
+			if locked {
 				mu.Unlock()
-				locked = false
 			}
-			defer func() {
-				if locked {
-					mu.Unlock()
-				}
-			}()
+		}()
 
-			dial := c.Dial
-			if dial == nil {
-				dial = net.Dial
-			}
-			conn, err = dial(network, addr)
+		dial := c.Dial
+		if dial == nil {
+			dial = net.Dial
+		}
+		conn, err = dial(network, addr)
+		if err != nil {
+			return nil, err
+		}
+
+		if locked {
+			resolvedAddr = conn.RemoteAddr()
+			mu.Unlock()
+			locked = false
+		}
+
+		if c.UseH3 {
+			conn = &clientH3PacketConn{conn.(net.PacketConn), conn, conn.RemoteAddr()}
+		}
+
+		return conn, err
+	}
+
+	if c.UseH3 {
+		return &http3.RoundTripper{
+			TLSClientConfig: c.TLSConfig,
+			Dial: func(network, addr string, tlsCfg *tls.Config, quicCfg *quic.Config) (quic.Session, error) {
+				conn, err := dial(network, addr)
+				if err != nil {
+					return nil, err
+				}
+				return quic.Dial(conn.(net.PacketConn), conn.RemoteAddr(), addr, tlsCfg, quicCfg)
+			},
+		}
+	}
+
+	return &http2.Transport{
+		DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
+			conn, err := dial(network, addr)
 			if err != nil {
 				return nil, err
 			}
-
-			if locked {
-				resolvedAddr = conn.RemoteAddr()
-				mu.Unlock()
-				locked = false
-			}
-
 			if !c.UseH2C {
 				cn := tls.Client(conn, cfg)
 				if err := cn.Handshake(); err != nil {
@@ -272,7 +314,6 @@ func (c *Client) newTransport() (ts http.RoundTripper) {
 				}
 				conn = cn
 			}
-
 			return conn, nil
 		},
 		TLSClientConfig: c.TLSConfig,

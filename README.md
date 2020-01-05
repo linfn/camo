@@ -44,7 +44,7 @@ Camo is a VPN using HTTP/2 over TLS.
 docker pull linfn/camo
 ```
 
-或者使用 [go (1.12 or newer)](https://golang.org) 编译安装最新版本:
+或者使用 [go (1.13 or newer)](https://golang.org) 编译安装最新版本:
 
 ```sh
 go get -u github.com/linfn/camo
@@ -185,7 +185,7 @@ sudo camo client -6 -password <password> <hostname>
 
 ## Build
 
-golang (1.12 or newer) required.
+golang (1.13 or newer) required.
 
 ```sh
 make

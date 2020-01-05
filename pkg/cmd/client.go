@@ -44,6 +44,7 @@ type Client struct {
 	disableReGateway bool
 	logLevel         string
 	useH2C           bool
+	useH3            bool
 	debugHTTP        string
 
 	log        camo.Logger
@@ -69,6 +70,7 @@ func (cmd *Client) flagSet() *flag.FlagSet {
 	fs.BoolVar(&cmd.disableReGateway, "disable-redirect-gateway", env.Bool("CAMO_DISABLE_REDIRECT_GATEWAY", false), "dsiable redirect gateway")
 	fs.StringVar(&cmd.logLevel, "log-level", env.String("CAMO_LOG_LEVEL", camo.LogLevelTexts[camo.LogLevelInfo]), "log level")
 	fs.BoolVar(&cmd.useH2C, "h2c", env.Bool("CAMO_H2C", false), "use h2c (for debug)")
+	fs.BoolVar(&cmd.useH3, "http3", env.Bool("CAMO_HTTP3", false), "use http3/quic")
 	fs.StringVar(&cmd.debugHTTP, "debug-http", env.String("CAMO_DEBUG_HTTP", ""), "debug http server listen address")
 
 	cmd.flags = fs
@@ -159,9 +161,19 @@ func (cmd *Client) Run(args ...string) {
 		TLSConfig: cmd.initTLSConfig(),
 		Dial: func(network, addr string) (net.Conn, error) {
 			if cmd.resolve4 {
-				network = "tcp4"
+				switch network {
+				case "tcp":
+					network = "tcp4"
+				case "udp":
+					network = "udp4"
+				}
 			} else if cmd.resolve6 {
-				network = "tcp6"
+				switch network {
+				case "tcp":
+					network = "tcp6"
+				case "udp":
+					network = "udp6"
+				}
 			}
 			if cmd.resolve != "" {
 				addr = cmd.resolve
@@ -177,6 +189,7 @@ func (cmd *Client) Run(args ...string) {
 		Auth:   func(r *http.Request) { camo.SetAuth(r, cmd.password) },
 		Logger: log,
 		UseH2C: cmd.useH2C,
+		UseH3:  cmd.useH3,
 		Noise:  cmd.getNoise(cid),
 	}
 
