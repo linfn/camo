@@ -46,6 +46,7 @@ type Server struct {
 	autocertEmail string
 	logLevel      string
 	useH2C        bool
+	enableH3      bool
 	debugHTTP     string
 
 	log camo.Logger
@@ -73,6 +74,7 @@ func (cmd *Server) flagSet() *flag.FlagSet {
 	fs.StringVar(&cmd.autocertEmail, "autocert-email", env.String("CAMO_AUTOCERT_EMAIL", ""), "(optional) email address")
 	fs.StringVar(&cmd.logLevel, "log-level", env.String("CAMO_LOG_LEVEL", camo.LogLevelTexts[camo.LogLevelInfo]), "log level")
 	fs.BoolVar(&cmd.useH2C, "h2c", env.Bool("CAMO_H2C", false), "use h2c (for debug)")
+	fs.BoolVar(&cmd.enableH3, "http3", env.Bool("CAMO_HTTP3", false), "enable http3")
 	fs.StringVar(&cmd.debugHTTP, "debug-http", env.String("CAMO_DEBUG_HTTP", ""), "debug http server listen address")
 
 	cmd.flags = fs
@@ -192,7 +194,7 @@ func (cmd *Server) Run(args ...string) {
 		}
 	}()
 
-	if !cmd.useH2C {
+	if cmd.enableH3 && !cmd.useH2C {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
