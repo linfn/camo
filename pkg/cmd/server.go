@@ -63,8 +63,8 @@ func (cmd *Server) flagSet() *flag.FlagSet {
 	fs.IntVar(&cmd.mtu, "mtu", env.Int("CAMO_MTU", camo.DefaultMTU), "tun mtu")
 	fs.BoolVar(&cmd.tun4, "4", env.Bool("CAMO_ENABLE_IP4", false), "tunneling for IPv4")
 	fs.BoolVar(&cmd.tun6, "6", env.Bool("CAMO_ENABLE_IP6", false), "tunneling for IPv6")
-	fs.StringVar(&cmd.tunIPv4, "ip4", env.String("CAMO_TUN_IP4", "10.20.0.1/24"), "tun IPv4 cidr")
-	fs.StringVar(&cmd.tunIPv6, "ip6", env.String("CAMO_TUN_IP6", "fd01:cafe::1/64"), "tun IPv6 cidr")
+	fs.StringVar(&cmd.tunIPv4, "ip4", env.String("CAMO_IP4", "10.20.0.1/24"), "tun IPv4 cidr")
+	fs.StringVar(&cmd.tunIPv6, "ip6", env.String("CAMO_IP6", "fd01:cafe::1/64"), "tun IPv6 cidr")
 	fs.BoolVar(&cmd.disableNAT4, "disable-nat4", env.Bool("CAMO_DISABLE_NAT4", false), "disable NAT for IPv4")
 	fs.BoolVar(&cmd.disableNAT6, "disable-nat6", env.Bool("CAMO_DISABLE_NAT6", false), "disable NAT for IPv6")
 	fs.StringVar(&cmd.autocertHost, "autocert-host", env.String("CAMO_AUTOCERT_HOST", ""), "hostname")
@@ -113,12 +113,12 @@ func (cmd *Server) parseFlags(args []string) {
 
 	if cmd.tun4 {
 		if _, _, err := net.ParseCIDR(cmd.tunIPv4); err != nil {
-			log.Fatalf("invalid --tun-ip4 cidr: %v", err)
+			log.Fatalf("invalid -ip4 cidr: %v", err)
 		}
 	}
 	if cmd.tun6 {
 		if _, _, err := net.ParseCIDR(cmd.tunIPv6); err != nil {
-			log.Fatalf("invalid --tun-ip6 cidr: %v", err)
+			log.Fatalf("invalid -ip6 cidr: %v", err)
 		}
 	}
 
