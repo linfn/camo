@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/linfn/camo/internal/util"
+	"github.com/linfn/camo/pkg/util"
 )
 
 const (

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/linfn/camo/internal/util"
+	"github.com/linfn/camo/pkg/util"
 )
 
 func TestTLSPSK(t *testing.T) {

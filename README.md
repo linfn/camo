@@ -41,16 +41,13 @@ Camo is a VPN using HTTP/2 over TLS.
 或者使用 `camo` 的 docker 镜像:
 
 ```sh
-# for server
 docker pull linfn/camo
-# for client
-docker pull linfn/camo-client
 ```
 
 或者使用 [go (1.12 or newer)](https://golang.org) 编译安装最新版本:
 
 ```sh
-go get -u github.com/linfn/camo/cmd/...
+go get -u github.com/linfn/camo
 ```
 
 ## Getting Started
@@ -63,11 +60,11 @@ go get -u github.com/linfn/camo/cmd/...
 
 ### Run Server with Docker
 
-`camo` 建议你使用 [docker](https://get.docker.com/) 来运行 [camo-server](https://hub.docker.com/r/linfn/camo).
+`camo` 建议你使用 [docker](https://get.docker.com/) 来运行 [camo server](https://hub.docker.com/r/linfn/camo).
 
 #### Standard Mode (Server)
 
-将你的域名指向你的 IP 后, 启动 `camo-server`
+将你的域名指向你的 IP 后, 启动 `camo server`
 
 ```sh
 docker run -d --cap-add=NET_ADMIN --device /dev/net/tun \
@@ -75,21 +72,21 @@ docker run -d --cap-add=NET_ADMIN --device /dev/net/tun \
     -v $HOME/.cache/camo/certs:/camo/certs \
     --name camo \
     -e CAMO_PASSWORD=<password> \
-    linfn/camo --autocert-host <hostname>
+    linfn/camo server --autocert-host <hostname>
 ```
 
 这里 `<hostname>` 是你使用的域名 (它应该正确的指向了你的 IP, 否则无法通过 ACME Challenge), 挂载的 `$HOME/.cache/camo/certs` 目录用于存储之后自动生成的证书.
 
 #### PSK Mode (Server)
 
-删除标准模式中的 `--autocert-host <hostname>` 参数, `camo-server` 就会使用 PSK 模式工作:
+删除标准模式中的 `--autocert-host <hostname>` 参数, `camo server` 就会使用 PSK 模式工作:
 
 ```sh
 docker run -d --cap-add=NET_ADMIN --device /dev/net/tun \
     -p 443:443 \
     --name camo \
     -e CAMO_PASSWORD=<password> \
-    linfn/camo
+    linfn/camo server
 ```
 
 #### Enable IPv6 with Docker
@@ -111,7 +108,7 @@ docker network create --ipv6 --subnet 2001:db8:1::/64 ipv6
 这里 `2001:db8:1::/64` 是一个示例网段, 如果你使用 Public IP 模式 (方式一), 你需要把它替换到 vps 服务商提供给你的 Public IPv6 网段下;
 如果你使用 NAT 模式 (方式二), 你可以自己配置一个私有网段, 例如 fd00:1::/64.
 
-**Step 2**: 运行 `camo-server`
+**Step 2**: 运行 `camo server`
 
 这里以 `camo` 的标准模式举例 (如果使用 PSK 模式, 只需删除 `--autocert-host <hostname>` 参数即可)
 
@@ -127,7 +124,7 @@ docker run -d --cap-add NET_ADMIN --cap-add SYS_MODULE \
     -v $HOME/.cache/camo/certs:/camo/certs \
     --name camo \
     -e CAMO_PASSWORD=<password> \
-    linfn/camo --autocert-host <hostname>
+    linfn/camo server --autocert-host <hostname>
 ```
 
 这里 `--cap-add SYS_MODULE` 和 `-v /lib/modules:/lib/modules:ro` 是为了让 `ip6tables` 有能力自动载入需要的内核模块.
@@ -155,14 +152,14 @@ ip6tables -t nat -A POSTROUTING -s 2001:db8:1::/64 -j MASQUERADE
 
 ### Run Client
 
-> NOTE: camo-client 目前仅支持 macOS 和 linux 平台, windows 平台的支持正在进行中
+> NOTE: `camo client` 目前仅支持 macOS 和 linux 平台, windows 平台的支持正在进行中
 
 #### Standard Mode (Client)
 
 使用标准模式启动 (需要 root 权限):
 
 ```sh
-sudo camo-client -password <password> <hostname>
+sudo camo client -password <password> <hostname>
 ```
 
 #### PSK Mode (Client)
@@ -170,20 +167,20 @@ sudo camo-client -password <password> <hostname>
 使用 PSK 模式启动 (需要 root 权限):
 
 ```sh
-sudo camo-client -psk -password <password> -resolve <ip[:port]> <fake_hostname>
+sudo camo client -psk -password <password> -resolve <ip[:port]> <fake_hostname>
 ```
 
 这里 `fake_hostname` 可以填写任意的域名 (例如 github.com), 然后在 `-resolve` 后填写真实的服务器 ip 地址 (端口默认 443).
 
 #### IPv4 or IPv6 only
 
-`camo-client` 会创建一个 `tun` 设备, 并同时接管 IPv4 和 IPv6 流量 (如果服务器启用了 IPv6 的话), 可以通过 `-4` 或 `-6` flag 进行设置, 例如:
+`camo client` 会创建一个 `tun` 设备, 并同时接管 IPv4 和 IPv6 流量 (如果服务器启用了 IPv6 的话), 可以通过 `-4` 或 `-6` flag 进行设置, 例如:
 
 ```sh
 # IPv4 only
-sudo camo-client -4 -password <password> <hostname>
+sudo camo client -4 -password <password> <hostname>
 # IPv6 only
-sudo camo-client -6 -password <password> <hostname>
+sudo camo client -6 -password <password> <hostname>
 ```
 
 ## Build

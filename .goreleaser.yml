@@ -8,23 +8,9 @@ before:
     - go mod download
 
 builds:
-  - id: camo-server
-    main: ./cmd/camo-server
-    binary: camo-server
-    env:
-      - CGO_ENABLED=0
-    ldflags: -s -w -X main.buildDate={{ time "2006.01.02" }} -X main.buildCommit={{ .FullCommit }}
-    goos:
-      - linux
-      - darwin
-    goarch:
-      - 386
-      - amd64
-      - arm
-      - arm64
-  - id: camo-client
-    main: ./cmd/camo-client
-    binary: camo-clinet
+  - id: camo
+    main: .
+    binary: camo
     env:
       - CGO_ENABLED=0
     ldflags: -s -w -X main.buildDate={{ time "2006.01.02" }} -X main.buildCommit={{ .FullCommit }}

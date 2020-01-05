@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"context"
@@ -11,206 +11,211 @@ import (
 	"flag"
 	"fmt"
 	"hash/crc32"
-	stdlog "log"
 	"net"
 	"net/http"
-	_ "net/http/pprof"
 	"os"
 	"os/signal"
-	"path"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/linfn/camo"
-	"github.com/linfn/camo/internal/env"
-	"github.com/linfn/camo/internal/machineid"
-	"github.com/linfn/camo/internal/util"
+	"github.com/linfn/camo/pkg/camo"
+	"github.com/linfn/camo/pkg/env"
+	"github.com/linfn/camo/pkg/machineid"
+	"github.com/linfn/camo/pkg/util"
 )
 
-var (
-	buildCommit string
-	buildDate   string
-	camoDir     = getCamoDir()
-)
+// Client ...
+type Client struct {
+	flags *flag.FlagSet
 
-var (
-	help      = flag.Bool("help", false, "help")
-	password  = flag.String("password", env.String("CAMO_PASSWORD", ""), "Set a password. It is recommended to use the environment variable CAMO_PASSWORD to set the password.")
-	tun4      = flag.Bool("4", env.Bool("CAMO_ENABLE_IP4", false), "tunneling for IPv4 only")
-	tun6      = flag.Bool("6", env.Bool("CAMO_ENABLE_IP6", false), "tunneling for IPv6 only")
-	resolve   = flag.String("resolve", env.String("CAMO_RESOLVE", ""), "provide a custom address for a specific host and port pair")
-	resolve4  = flag.Bool("resolve4", env.Bool("CAMO_RESOLVE4", false), "resolve host name to IPv4 addresses only")
-	resolve6  = flag.Bool("resolve6", env.Bool("CAMO_RESOLVE6", false), "resolve host name to IPv6 addresses only")
-	usePSK    = flag.Bool("psk", env.Bool("CAMO_PSK", false), "use TLS 1.3 PSK mode")
-	mtu       = flag.Int("mtu", env.Int("CAMO_MTU", camo.DefaultMTU), "mtu")
-	reGateway = flag.Bool("redirect-gateway", env.Bool("CAMO_REDIRECT_GATEWAY", true), "redirect the gateway")
-	logLevel  = flag.String("log-level", env.String("CAMO_LOG_LEVEL", camo.LogLevelTexts[camo.LogLevelInfo]), "log level")
-	useH2C    = flag.Bool("h2c", env.Bool("CAMO_H2C", false), "use h2c (for debug)")
-	debugHTTP = flag.String("debug-http", env.String("CAMO_DEBUG_HTTP", ""), "debug http server listen address")
-)
+	help             bool
+	host             string
+	password         string
+	tun4             bool
+	tun6             bool
+	resolve          string
+	resolve4         bool
+	resolve6         bool
+	usePSK           bool
+	mtu              int
+	disableReGateway bool
+	logLevel         string
+	useH2C           bool
+	debugHTTP        string
 
-var (
-	log        *camo.LevelLogger
-	host       string
-	cid        string
+	log        camo.Logger
 	remoteAddr atomic.Value
-)
+}
 
-func init() {
-	flag.Usage = func() {
-		fmt.Printf("Camo is a VPN using HTTP/2 over TLS.\n\n")
-		fmt.Printf("Build Commit: %s\nBuild Date: %s\n\n", buildCommit, buildDate)
-		fmt.Printf("Usage: camo-client [OPTIONS] host\n")
-		flag.PrintDefaults()
+func (cmd *Client) flagSet() *flag.FlagSet {
+	if cmd.flags != nil {
+		return cmd.flags
 	}
 
-	flag.Parse()
-	if *help {
+	fs := flag.NewFlagSet("client", flag.ExitOnError)
+
+	fs.BoolVar(&cmd.help, "h", false, "help")
+	fs.StringVar(&cmd.password, "password", env.String("CAMO_PASSWORD", ""), "Set a password. It is recommended to use the environment variable CAMO_PASSWORD to set the password.")
+	fs.BoolVar(&cmd.tun4, "4", env.Bool("CAMO_ENABLE_IP4", false), "tunneling for IPv4")
+	fs.BoolVar(&cmd.tun6, "6", env.Bool("CAMO_ENABLE_IP6", false), "tunneling for IPv6")
+	fs.StringVar(&cmd.resolve, "resolve", env.String("CAMO_RESOLVE", ""), "provide a custom address for a specific host and port pair")
+	fs.BoolVar(&cmd.resolve4, "resolve4", env.Bool("CAMO_RESOLVE4", false), "resolve host name to IPv4 addresses only")
+	fs.BoolVar(&cmd.resolve6, "resolve6", env.Bool("CAMO_RESOLVE6", false), "resolve host name to IPv6 addresses only")
+	fs.BoolVar(&cmd.usePSK, "psk", env.Bool("CAMO_PSK", false), "use TLS 1.3 PSK mode")
+	fs.IntVar(&cmd.mtu, "mtu", env.Int("CAMO_MTU", camo.DefaultMTU), "mtu")
+	fs.BoolVar(&cmd.disableReGateway, "disable-redirect-gateway", env.Bool("CAMO_DISABLE_REDIRECT_GATEWAY", false), "dsiable redirect gateway")
+	fs.StringVar(&cmd.logLevel, "log-level", env.String("CAMO_LOG_LEVEL", camo.LogLevelTexts[camo.LogLevelInfo]), "log level")
+	fs.BoolVar(&cmd.useH2C, "h2c", env.Bool("CAMO_H2C", false), "use h2c (for debug)")
+	fs.StringVar(&cmd.debugHTTP, "debug-http", env.String("CAMO_DEBUG_HTTP", ""), "debug http server listen address")
+
+	cmd.flags = fs
+	return fs
+}
+
+func (cmd *Client) Name() string {
+	return "client"
+}
+
+func (cmd *Client) Desc() string {
+	return "Connect to camo server"
+}
+
+func (cmd *Client) Usage() {
+	fmt.Printf("Usage: camo client [OPTIONS] <host>\n")
+	cmd.flagSet().PrintDefaults()
+}
+
+func (cmd *Client) parseFlags(args []string) {
+	fs := cmd.flagSet()
+
+	_ = fs.Parse(args)
+	if cmd.help {
 		return
 	}
 
-	initLog()
+	log := newLogger(cmd.logLevel)
+	cmd.log = log
 
-	host = flag.Arg(0)
-	if host == "" {
-		host = os.Getenv("CAMO_HOST")
-		if host == "" {
+	cmd.host = fs.Arg(0)
+	if cmd.host == "" {
+		cmd.host = os.Getenv("CAMO_HOST")
+		if cmd.host == "" {
 			log.Fatal("missing host")
 		}
 	}
 
-	if !*tun4 && !*tun6 {
-		*tun4 = true
-		*tun6 = true
+	if !cmd.tun4 && !cmd.tun6 {
+		cmd.tun4 = true
+		cmd.tun6 = true
 	}
 
-	if *resolve4 && *resolve6 {
+	if cmd.resolve4 && cmd.resolve6 {
 		log.Fatal("can not use -resolve4 and -resolve6 at the same time")
 	}
 
-	if *resolve != "" {
-		addr, err := util.GetHostPortAddr(*resolve, "443")
+	if cmd.resolve != "" {
+		addr, err := util.GetHostPortAddr(cmd.resolve, "443")
 		if err != nil {
-			log.Fatalf("resolve addr %s error: %v", *resolve, err)
+			log.Fatalf("resolve addr %s error: %v", cmd.resolve, err)
 		}
-		*resolve = addr
+		cmd.resolve = addr
 	}
 
-	if *usePSK && *useH2C {
+	if cmd.usePSK && cmd.useH2C {
 		log.Fatal("cannot use both psk mode and h2c mode")
 	}
 
-	if *password == "" {
+	if cmd.password == "" {
 		log.Fatal("missing password")
 	}
-	// hidden the password to expvar and pprof package
-	for i := range os.Args {
-		if os.Args[i] == "-password" || os.Args[i] == "--password" {
-			os.Args[i+1] = "*"
-		}
-	}
-
-	cid = ensureCID(host)
+	hiddenPasswordArg()
 }
 
-func main() {
-	if *help {
-		flag.Usage()
+func (cmd *Client) Run(args ...string) {
+	cmd.parseFlags(args)
+	if cmd.help {
+		cmd.Usage()
 		return
 	}
 
-	iface, err := camo.NewTunIface(*mtu)
+	log := cmd.log
+	cid := cmd.getCID(cmd.host)
+
+	iface, err := camo.NewTunIface(cmd.mtu)
 	if err != nil {
-		log.Fatalf("failed to create tun device: %v", err)
+		log.Panicf("failed to create tun device: %v", err)
 	}
 	defer iface.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	c := &camo.Client{
-		MTU:       *mtu,
+		MTU:       cmd.mtu,
 		CID:       cid,
-		Host:      host,
-		TLSConfig: initTLSConfig(),
+		Host:      cmd.host,
+		TLSConfig: cmd.initTLSConfig(),
 		Dial: func(network, addr string) (net.Conn, error) {
-			if *resolve4 {
+			if cmd.resolve4 {
 				network = "tcp4"
-			} else if *resolve6 {
+			} else if cmd.resolve6 {
 				network = "tcp6"
 			}
-			if *resolve != "" {
-				addr = *resolve
+			if cmd.resolve != "" {
+				addr = cmd.resolve
 			}
 			var d net.Dialer
 			conn, err := d.DialContext(ctx, network, addr)
 			if err == nil {
-				remoteAddr.Store(conn.RemoteAddr())
+				cmd.remoteAddr.Store(conn.RemoteAddr())
 				log.Infof("connection succeeded. remote: %s", conn.RemoteAddr())
 			}
 			return conn, err
 		},
-		Auth:   func(r *http.Request) { camo.SetAuth(r, *password) },
+		Auth:   func(r *http.Request) { camo.SetAuth(r, cmd.password) },
 		Logger: log,
-		UseH2C: *useH2C,
-		Noise:  getNoise(),
+		UseH2C: cmd.useH2C,
+		Noise:  cmd.getNoise(cid),
 	}
 
 	expvar.Publish("camo", c.Metrics())
 
 	go func() {
-		c := make(chan os.Signal, 1)
-		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-		log.Debugf("receive signal %s", <-c)
+		cmd := make(chan os.Signal, 1)
+		signal.Notify(cmd, os.Interrupt, syscall.SIGTERM)
+		log.Debugf("receive signal %s", <-cmd)
 		cancel()
 	}()
 
-	if *debugHTTP != "" {
-		go debugHTTPServer()
+	if cmd.debugHTTP != "" {
+		go cmd.debugHTTPServer()
 	}
 
-	runClient(ctx, c, iface)
+	cmd.runClient(ctx, c, iface)
 }
 
-func initLog() {
-	logLevel, ok := camo.LogLevelValues[strings.ToUpper(*logLevel)]
-	if !ok {
-		stdlog.Fatal("invalid log level")
-	}
-	log = camo.NewLogger(stdlog.New(os.Stderr, "", stdlog.LstdFlags|stdlog.Lshortfile), logLevel)
-}
-
-func getCamoDir() string {
-	dir, err := os.UserCacheDir()
-	if err == nil {
-		return path.Join(dir, "camo")
-	}
-	return ".camo"
-}
-
-func ensureCID(host string) string {
+func (cmd *Client) getCID(host string) string {
 	mid, err := machineid.MachineID(camoDir)
 	if err != nil {
-		log.Fatal(err)
+		cmd.log.Panic(err)
 	}
 	mac := hmac.New(sha256.New, []byte(mid))
 	_, err = mac.Write([]byte("camo@" + host))
 	if err != nil {
-		log.Panic(err)
+		cmd.log.Panic(err)
 	}
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func initTLSConfig() *tls.Config {
+func (cmd *Client) initTLSConfig() *tls.Config {
 	tlsCfg := new(tls.Config)
-	tlsCfg.ServerName = util.StripPort(host)
-	if *usePSK {
-		cs, err := camo.NewTLSPSKSessionCache(tlsCfg.ServerName, camo.NewSessionTicketKey(*password))
+	tlsCfg.ServerName = util.StripPort(cmd.host)
+	if cmd.usePSK {
+		cs, err := camo.NewTLSPSKSessionCache(tlsCfg.ServerName, camo.NewSessionTicketKey(cmd.password))
 		if err != nil {
-			log.Panicf("failed to init TLS PSK session: %v", err)
+			cmd.log.Panicf("failed to init TLS PSK session: %v", err)
 		}
 		tlsCfg.ClientSessionCache = cs
 	} else {
@@ -219,11 +224,13 @@ func initTLSConfig() *tls.Config {
 	return tlsCfg
 }
 
-func getNoise() int {
+func (cmd *Client) getNoise(cid string) int {
 	return int(crc32.ChecksumIEEE([]byte(cid)))
 }
 
-func setupTun(iface *camo.Iface, tunIP net.IP, mask net.IPMask, gateway net.IP) (reset func(), err error) {
+func (cmd *Client) setupTun(iface *camo.Iface, tunIP net.IP, mask net.IPMask, gateway net.IP) (reset func(), err error) {
+	log := cmd.log
+
 	var rollback util.Rollback
 	defer func() {
 		if err != nil {
@@ -253,9 +260,9 @@ func setupTun(iface *camo.Iface, tunIP net.IP, mask net.IPMask, gateway net.IP) 
 	}
 	log.Infof("%s(%s) up", iface.Name(), cidr)
 
-	if *reGateway {
+	if !cmd.disableReGateway {
 		// bypass tun for server ip
-		srvAddr, _ := remoteAddr.Load().(net.Addr)
+		srvAddr, _ := cmd.remoteAddr.Load().(net.Addr)
 		if srvAddr == nil {
 			return nil, errors.New("failed to get server address")
 		}
@@ -289,7 +296,9 @@ func setupTun(iface *camo.Iface, tunIP net.IP, mask net.IPMask, gateway net.IP) 
 	return rollback.Do, nil
 }
 
-func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
+func (cmd *Client) runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
+	log := cmd.log
+
 	createTunnel := func(ctx context.Context, ipVersion int) (func(context.Context) error, error) {
 		var err error
 
@@ -324,9 +333,9 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 
 		var reset func()
 		if ipVersion == 4 && runtime.GOOS == "darwin" {
-			reset, err = setupTun(iface, ip, mask, ip)
+			reset, err = cmd.setupTun(iface, ip, mask, ip)
 		} else {
-			reset, err = setupTun(iface, ip, mask, gw)
+			reset, err = cmd.setupTun(iface, ip, mask, gw)
 		}
 		if err != nil {
 			_ = tunnel(ctx) // use a canceled ctx to terminate the tunnel
@@ -398,7 +407,7 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 
 	var tunWG sync.WaitGroup
 
-	if *tun4 {
+	if cmd.tun4 {
 		tunWG.Add(1)
 		go func() {
 			tunneld(ctx, 4)
@@ -406,7 +415,7 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 		}()
 	}
 
-	if *tun6 {
+	if cmd.tun6 {
 		tunWG.Add(1)
 		go func() {
 			tunneld(ctx, 6)
@@ -422,9 +431,9 @@ func runClient(ctx context.Context, c *camo.Client, iface *camo.Iface) {
 	wg.Wait()
 }
 
-func debugHTTPServer() {
-	err := http.ListenAndServe(*debugHTTP, nil)
+func (cmd *Client) debugHTTPServer() {
+	err := http.ListenAndServe(cmd.debugHTTP, nil)
 	if err != http.ErrServerClosed {
-		log.Errorf("debug http server exited: %v", err)
+		cmd.log.Errorf("debug http server exited: %v", err)
 	}
 }

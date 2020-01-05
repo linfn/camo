@@ -1,4 +1,4 @@
-package camo // import "github.com/linfn/camo"
+package camo
 
 import (
 	"context"
