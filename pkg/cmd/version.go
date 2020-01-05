@@ -20,7 +20,5 @@ func (cmd *Version) Usage() {
 }
 
 func (cmd *Version) Run(args ...string) {
-	if cmd.BuildCommit != "" || cmd.BuildDate != "" {
-		fmt.Printf("Build Commit: %s\nBuild Date: %s\n", cmd.BuildCommit, cmd.BuildDate)
-	}
+	fmt.Printf("Build Commit: %s\nBuild Date: %s\n", cmd.BuildCommit, cmd.BuildDate)
 }
