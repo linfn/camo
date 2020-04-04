@@ -2,6 +2,7 @@ language: go
 
 go:
   - 1.13.x
+  - 1.14.x
   # - tip
 
 os:
@@ -31,4 +32,4 @@ deploy:
     on:
       branch: master
       tags: true
-      condition: '"$TRAVIS_OS_NAME" = linux && "$TRAVIS_GO_VERSION" =~ ^1\.13'
+      condition: '"$TRAVIS_OS_NAME" = linux && "$TRAVIS_GO_VERSION" =~ ^1\.14'
