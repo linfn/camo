@@ -21,9 +21,9 @@ func (cmd *Help) Usage() {
 }
 
 func (cmd *Help) Run(args ...string) {
-	if len(args) == 2 {
+	if len(args) == 1 {
 		for _, c := range cmd.Commands {
-			if c.Name() == args[1] {
+			if c.Name() == args[0] {
 				c.Usage()
 				return
 			}
